@@ -5,6 +5,7 @@ import type {
   SyncScenarioForAction,
 } from '../types';
 
+import { isSuperSet } from '../Entrypoint.helpers';
 import { toImportKey } from '../../utils/importOverrides';
 
 const warnedSlowImportsByServices = new WeakMap<Services, Set<string>>();
@@ -63,6 +64,14 @@ export function* processImports(
     }
 
     this.entrypoint.addDependency(dependency);
+
+    // Skip re-processing if dependency is already evaluated with sufficient exports.
+    // This prevents stage-1 from replacing EvaluatedEntrypoints with new Entrypoints
+    // when the cached evaluation already covers the requested `only` subset.
+    const cachedDep = this.services.cache.get('entrypoints', resolved);
+    if (cachedDep?.evaluated && isSuperSet(cachedDep.evaluatedOnly, only)) {
+      continue;
+    }
 
     const nextEntrypoint = this.entrypoint.createChild(resolved, only);
     if (nextEntrypoint === 'loop' || nextEntrypoint.ignored) {

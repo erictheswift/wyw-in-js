@@ -254,6 +254,33 @@ export class Module {
 
       this.dependencies.push(id);
 
+      // Short-circuit: if the exports Proxy already has all requested values,
+      // skip getEntrypoint entirely. The Proxy accumulates properties across
+      // evaluations and is shared across superseded entrypoints, so even when
+      // the cache holds a non-evaluated Entrypoint (from a concurrent S1 miss),
+      // the Proxy still has values from prior evaluations.
+      // We check actual values (not just key existence) because the shaker may
+      // leave defineProperty stubs that set keys with undefined getters.
+      if (!dependency.only.includes('__wywPreval')) {
+        const cachedEntry = this.cache.get('entrypoints', dependency.resolved);
+        const cachedExports = cachedEntry?.exports;
+        if (
+          cachedExports &&
+          typeof cachedExports === 'object' &&
+          dependency.only.length > 0 &&
+          dependency.only.every(
+            (k) =>
+              k === 'side-effect' || cachedExports[k as keyof typeof cachedExports] !== undefined
+          )
+        ) {
+          this.debug(
+            'require',
+            `${id} -> ${dependency.resolved} (exports cache hit)`
+          );
+          return cachedExports;
+        }
+      }
+
       this.debug('require', `${id} -> ${dependency.resolved}`);
 
       const entrypoint = this.getEntrypoint(
@@ -448,6 +475,14 @@ export class Module {
     const entrypoint = this.cache.get('entrypoints', filename);
     if (entrypoint && isSuperSet(entrypoint.evaluatedOnly ?? [], only)) {
       log('✅ file has been already evaluated');
+      return entrypoint;
+    }
+
+    // Wildcard only (from Node resolver fallback) can reuse any evaluated
+    // entrypoint — the VM code accesses specific properties through the Proxy,
+    // and the Proxy already has accumulated values from prior evaluations.
+    if (entrypoint?.evaluated && only.includes('*')) {
+      log('✅ file already evaluated, reusing for wildcard request');
       return entrypoint;
     }
 
