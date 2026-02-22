@@ -439,22 +439,32 @@ export class Entrypoint extends BaseEntrypoint {
 
   private supersede(newOnlyOrEntrypoint: string[] | Entrypoint): Entrypoint {
     this.#pendingOnly = null;
-    const newEntrypoint =
-      newOnlyOrEntrypoint instanceof Entrypoint
-        ? newOnlyOrEntrypoint
-        : new Entrypoint(
-            this.services,
-            this.parents,
-            this.initialCode,
-            this.name,
-            newOnlyOrEntrypoint,
-            this.exports,
-            this.evaluatedOnly,
-            this.loadedAndParsed,
-            this.resolveTasks,
-            this.dependencies,
-            this.generation + 1
-          );
+    let newEntrypoint: Entrypoint;
+
+    if (newOnlyOrEntrypoint instanceof Entrypoint) {
+      newEntrypoint = newOnlyOrEntrypoint;
+    } else {
+      // Re-read cache to inherit evaluatedOnly from any EvaluatedEntrypoint
+      // created by concurrent S2 evaluation while this entry was processing.
+      const currentCached = this.services.cache.get('entrypoints', this.name);
+      const bestEvaluatedOnly = currentCached?.evaluatedOnly?.length
+        ? mergeOnly(this.evaluatedOnly, currentCached.evaluatedOnly)
+        : this.evaluatedOnly;
+
+      newEntrypoint = new Entrypoint(
+        this.services,
+        this.parents,
+        this.initialCode,
+        this.name,
+        newOnlyOrEntrypoint,
+        this.exports,
+        bestEvaluatedOnly,
+        this.loadedAndParsed,
+        this.resolveTasks,
+        this.dependencies,
+        this.generation + 1
+      );
+    }
 
     this.services.eventEmitter.entrypointEvent(this.seqId, {
       type: 'superseded',

@@ -35,7 +35,7 @@ import {
 } from './transform/Entrypoint.helpers';
 import type { IEntrypointDependency } from './transform/Entrypoint.types';
 import type { IEvaluatedEntrypoint } from './transform/EvaluatedEntrypoint';
-import { isUnprocessedEntrypointError } from './transform/actions/UnprocessedEntrypointError';
+import { UnprocessedEntrypointError, isUnprocessedEntrypointError } from './transform/actions/UnprocessedEntrypointError';
 import type { Services } from './transform/types';
 import {
   applyImportOverrideToOnly,
@@ -45,6 +45,18 @@ import {
 } from './utils/importOverrides';
 import { parseRequest, stripQueryAndHash } from './utils/parseRequest';
 import { createVmContext } from './vm/createVmContext';
+
+// Cache UnprocessedEntrypointError per file to avoid redundant VM executions.
+// When 200+ concurrent transforms all try to evaluate the same file and all
+// fail because a deep dependency hasn't been processed yet, this skips
+// redundant VM runs by re-throwing the cached error immediately.
+// Keyed by TransformCacheCollection to avoid leaking across webpack builds.
+const _evalFailures = new WeakMap<object, Map<string, UnprocessedEntrypointError>>();
+function getEvalFailures(cache: TransformCacheCollection): Map<string, UnprocessedEntrypointError> {
+  let m = _evalFailures.get(cache);
+  if (!m) { m = new Map(); _evalFailures.set(cache, m); }
+  return m;
+}
 
 type HiddenModuleMembers = {
   _extensions: Record<string, () => void>;
@@ -254,33 +266,6 @@ export class Module {
 
       this.dependencies.push(id);
 
-      // Short-circuit: if the exports Proxy already has all requested values,
-      // skip getEntrypoint entirely. The Proxy accumulates properties across
-      // evaluations and is shared across superseded entrypoints, so even when
-      // the cache holds a non-evaluated Entrypoint (from a concurrent S1 miss),
-      // the Proxy still has values from prior evaluations.
-      // We check actual values (not just key existence) because the shaker may
-      // leave defineProperty stubs that set keys with undefined getters.
-      if (!dependency.only.includes('__wywPreval')) {
-        const cachedEntry = this.cache.get('entrypoints', dependency.resolved);
-        const cachedExports = cachedEntry?.exports;
-        if (
-          cachedExports &&
-          typeof cachedExports === 'object' &&
-          dependency.only.length > 0 &&
-          dependency.only.every(
-            (k) =>
-              k === 'side-effect' || cachedExports[k as keyof typeof cachedExports] !== undefined
-          )
-        ) {
-          this.debug(
-            'require',
-            `${id} -> ${dependency.resolved} (exports cache hit)`
-          );
-          return cachedExports;
-        }
-      }
-
       this.debug('require', `${id} -> ${dependency.resolved}`);
 
       const entrypoint = this.getEntrypoint(
@@ -382,6 +367,18 @@ export class Module {
         entrypoint.createEvaluated()
       );
       evaluatedCreated = true;
+    } else if (!cached.evaluated) {
+      // Even for superseded entrypoints, create an EvaluatedEntrypoint if the
+      // cache holds a non-evaluated entry. This prevents concurrent transforms
+      // from re-evaluating the same file: when transform A supersedes the entry
+      // but hasn't evaluated yet, transform B's require() would find the
+      // non-evaluated entry and trigger redundant evaluation.
+      this.cache.add(
+        'entrypoints',
+        entrypoint.name,
+        entrypoint.createEvaluated()
+      );
+      evaluatedCreated = true;
     }
 
     const { transformedCode: source } = entrypoint;
@@ -395,6 +392,23 @@ export class Module {
     if (this.isEvaluated) {
       this.debug('evaluate', `is already evaluated`);
       return;
+    }
+
+    // Skip VM if a previous evaluation of the same file failed with
+    // UnprocessedEntrypointError and the missing dep is still unprocessed.
+    // This avoids 200+ redundant VM executions when many concurrent transforms
+    // all try to evaluate the same file before a deep dependency is ready.
+    const failures = getEvalFailures(this.cache);
+    const cachedFailure = failures.get(entrypoint.name);
+    if (cachedFailure) {
+      const missingEp = cachedFailure.entrypoint.supersededWith ?? cachedFailure.entrypoint;
+      if (missingEp.transformedCode === null) {
+        if (evaluatedCreated) {
+          this.cache.add('entrypoints', entrypoint.name, cached);
+        }
+        throw cachedFailure;
+      }
+      failures.delete(entrypoint.name);
     }
 
     this.debug('evaluate');
@@ -432,6 +446,7 @@ export class Module {
       );
 
       script.runInContext(context);
+      failures.delete(entrypoint.name);
     } catch (e) {
       this.isEvaluated = false;
       if (evaluatedCreated) {
@@ -439,7 +454,7 @@ export class Module {
       }
 
       if (isUnprocessedEntrypointError(e)) {
-        // It will be handled by evalFile scenario
+        failures.set(entrypoint.name, e);
         throw e;
       }
 

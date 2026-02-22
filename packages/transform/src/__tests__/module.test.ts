@@ -849,13 +849,13 @@ describe('wildcard only reuse for evaluated entrypoints', () => {
     expect(result?.evaluated).toBe(false);
   });
 
-  it('require() returns cached exports when Proxy already has requested keys', () => {
+  it('new entrypoint inherits evaluatedOnly from superseded EvaluatedEntrypoint', () => {
     const depPath = require.resolve('./__fixtures__/objectExport.js');
 
     const cache = new TransformCacheCollection();
     const services = createServices({ cache });
 
-    // Evaluate dep with only: ['margin'] — Proxy now has { margin: 5 }
+    // Evaluate dep with only: ['margin'] — creates EvaluatedEntrypoint
     const depEntrypoint = createEntrypoint(
       services,
       depPath,
@@ -867,39 +867,17 @@ describe('wildcard only reuse for evaluated entrypoints', () => {
 
     const cachedAfterEval = cache.get('entrypoints', depPath);
     expect(cachedAfterEval?.evaluated).toBe(true);
-    expect('margin' in cachedAfterEval!.exports).toBe(true);
+    expect(cachedAfterEval?.evaluatedOnly).toContain('margin');
 
-    // Simulate S1 miss: replace EvaluatedEntrypoint with a new Entrypoint
-    // (this is what happens when a concurrent S1 creates a child with new only)
+    // Create a new entrypoint that supersedes the EvaluatedEntrypoint
     const freshEntrypoint = createEntrypoint(
       services,
       depPath,
       ['margin'],
       `module.exports = { margin: 5 };`
     );
-    // The new entrypoint shares the same Proxy (via BaseEntrypoint constructor)
+    // New entrypoint inherits evaluatedOnly from the EvaluatedEntrypoint
     expect(freshEntrypoint.evaluated).toBe(false);
-    expect('margin' in freshEntrypoint.exports).toBe(true);
-
-    // Now require() from a parent — the shortcut should return the cached Proxy
-    // directly without triggering getEntrypoint/evaluate
-    const parentEp = createEntrypoint(services, filename, ['*'], '');
-    const parentMod = new Module(services, parentEp);
-
-    // getEntrypoint with specific only=['margin'] should still work but
-    // if the shortcut fires in require(), it returns cachedExports directly.
-    // Verify via getEntrypoint: the cache has non-evaluated entry but
-    // exports Proxy has the value.
-    const cachedNow = cache.get('entrypoints', depPath);
-    expect(cachedNow?.evaluated).toBe(false);
-    expect('margin' in cachedNow!.exports).toBe(true);
-
-    // The shortcut checks cachedEntry.exports for the requested keys.
-    // Since 'margin' is in the Proxy, it returns without re-evaluation.
-    const result = parentMod.getEntrypoint(depPath, ['margin'], parentMod.debug);
-    // getEntrypoint sees evaluated=false, falls through to createRoot.
-    // But our require() shortcut would have caught it before getEntrypoint.
-    // Just verify the Proxy value is accessible:
-    expect(cachedNow!.exports.margin).toBe(5);
+    expect(freshEntrypoint.evaluatedOnly).toContain('margin');
   });
 });
