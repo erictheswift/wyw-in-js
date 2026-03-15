@@ -233,6 +233,11 @@ export class Module {
 
       // Resolve module id (and filename) relatively to parent module
       const dependency = this.resolveDependency(id);
+      if (dependency.resolved === null) {
+        this.debug('require', `${id} -> allowed-unresolved (empty module)`);
+        return undefined;
+      }
+
       if (dependency.resolved === id && !path.isAbsolute(id)) {
         // The module is a builtin node modules, but not in the allowed list
         throw new Error(
@@ -565,11 +570,23 @@ export class Module {
       const { filename } = this;
       const strippedId = stripQueryAndHash(id);
 
-      let resolved = this.moduleImpl._resolveFilename(strippedId, {
-        id: filename,
-        filename,
-        paths: this.moduleImpl._nodeModulePaths(path.dirname(filename)),
-      });
+      let resolved: string;
+      try {
+        resolved = this.moduleImpl._resolveFilename(strippedId, {
+          id: filename,
+          filename,
+          paths: this.moduleImpl._nodeModulePaths(path.dirname(filename)),
+        });
+      } catch (resolveErr) {
+        const override = getImportOverride(
+          this.services.options.pluginOptions.importOverrides,
+          strippedId
+        );
+        if (override?.unknown === 'allow') {
+          return { source: id, only: [], resolved: null };
+        }
+        throw resolveErr;
+      }
 
       const isFileSpecifier =
         strippedId.startsWith('.') || path.isAbsolute(strippedId);
