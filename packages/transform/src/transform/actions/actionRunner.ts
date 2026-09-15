@@ -280,15 +280,17 @@ export async function asyncActionRunner<TAction extends ActionQueueItem>(
       const [type, entrypoint, data, abortSignal, services = action.services] =
         result.value;
       const parentWasSuperseded = action.entrypoint.supersededWith !== null;
-      const nextAction = entrypoint.createAction(
-        type,
-        data,
-        abortSignal,
-        action.actionContext,
-        services
-      );
-
+      let nextAction: BaseAction<ActionQueueItem> | undefined;
       try {
+        // Creation can observe a supersede after the parent yielded. Deliver
+        // that child failure through the same catch path as execution failures.
+        nextAction = entrypoint.createAction(
+          type,
+          data,
+          abortSignal,
+          action.actionContext,
+          services
+        );
         actionResult = await asyncActionRunner(nextAction, actionHandlers, [
           ...stack,
           getActionRef(type, entrypoint),
@@ -303,7 +305,7 @@ export async function asyncActionRunner<TAction extends ActionQueueItem>(
           throw new AbortError('superseded');
         }
       } catch (e) {
-        nextAction.log('error', e);
+        (nextAction ?? action).log('error', e);
         if (isCacheRecoveryFenceError(e) || isCacheRecoveryControlError(e)) {
           throw e;
         }
@@ -358,15 +360,17 @@ export function syncActionRunner<TAction extends ActionQueueItem>(
       const [type, entrypoint, data, abortSignal, services = action.services] =
         result.value;
       const parentWasSuperseded = action.entrypoint.supersededWith !== null;
-      const nextAction = entrypoint.createAction(
-        type,
-        data,
-        abortSignal,
-        action.actionContext,
-        services
-      );
-
+      let nextAction: BaseAction<ActionQueueItem> | undefined;
       try {
+        // Creation can observe a supersede after the parent yielded. Deliver
+        // that child failure through the same catch path as execution failures.
+        nextAction = entrypoint.createAction(
+          type,
+          data,
+          abortSignal,
+          action.actionContext,
+          services
+        );
         actionResult = syncActionRunner(nextAction, actionHandlers, [
           ...stack,
           getActionRef(type, entrypoint),
@@ -375,7 +379,7 @@ export function syncActionRunner<TAction extends ActionQueueItem>(
           throw new AbortError('superseded');
         }
       } catch (e) {
-        nextAction.log('error', e);
+        (nextAction ?? action).log('error', e);
         if (isCacheRecoveryFenceError(e) || isCacheRecoveryControlError(e)) {
           throw e;
         }

@@ -47,6 +47,36 @@ describe('actionRunner', () => {
     expect(handlers.processEntrypoint).toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    'catches child creation abort: %s',
+    async (asyncMode) => {
+      const parent = createEntrypoint(services, '/foo/parent.js', ['default']);
+      const child = createEntrypoint(services, '/foo/child.js', ['first']);
+      const replacement = createEntrypoint(services, child.name, ['second']);
+      const observed = jest.fn();
+      const handlers = getHandlers<'sync'>({
+        *workflow(
+          this: IWorkflowAction
+        ): SyncScenarioForAction<IWorkflowAction> {
+          try {
+            yield ['processEntrypoint', child, undefined, null];
+          } catch (error) {
+            observed(error);
+            yield ['processEntrypoint', replacement, undefined, null];
+          }
+          return { code: 'current', sourceMap: null };
+        },
+      });
+      const action = parent.createAction('workflow', undefined, null);
+      const result = asyncMode
+        ? await asyncActionRunner(action, handlers)
+        : syncActionRunner(action, handlers);
+      expect(result).toEqual({ code: 'current', sourceMap: null });
+      expect(observed).toHaveBeenCalledWith(expect.any(AbortError));
+      expect(handlers.processEntrypoint).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it('does not return an action superseded by its actionCreated callback', () => {
     const name = '/foo/reentrant-action-created.js';
     const entrypoint = createEntrypoint(services, name, ['default']);
