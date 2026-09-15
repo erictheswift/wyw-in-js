@@ -8,7 +8,7 @@ import { isFeatureEnabled } from '@wyw-in-js/shared';
 
 import type { Entrypoint } from '../transform/Entrypoint';
 import type { IEvaluatedEntrypoint } from '../transform/EvaluatedEntrypoint';
-import { AbortError } from '../transform/actions/AbortError';
+import { AbortError, isAborted } from '../transform/actions/AbortError';
 import type { CacheRecoveryReason } from '../transform/actions/CacheEpochAbortedError';
 import { isCacheRecoveryControlError } from '../transform/actions/isCacheRecoveryControlError';
 import type { TransformCacheEpoch } from '../cache';
@@ -1586,7 +1586,7 @@ export class EvalBroker {
           (error) => {
             if (!this.isRequestContextActive(context)) return;
             if (
-              isCacheRecoveryControlError(error) &&
+              (isCacheRecoveryControlError(error) || isAborted(error)) &&
               this.rejectOwningEvalRequest(context, owningEvalRequest, error)
             ) {
               return;
@@ -1623,7 +1623,7 @@ export class EvalBroker {
           (error) => {
             if (!this.isRequestContextActive(context)) return;
             if (
-              isCacheRecoveryControlError(error) &&
+              (isCacheRecoveryControlError(error) || isAborted(error)) &&
               this.rejectOwningEvalRequest(context, owningEvalRequest, error)
             ) {
               return;
@@ -2122,7 +2122,7 @@ export class EvalBroker {
           resolved = await asyncResolve(specifier, importerId, stack);
           this.assertRequestContextActive(context);
         } catch (error) {
-          if (isCacheRecoveryControlError(error)) {
+          if (isCacheRecoveryControlError(error) || isAborted(error)) {
             throw error;
           }
 

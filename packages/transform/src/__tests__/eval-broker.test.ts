@@ -3568,7 +3568,7 @@ describe('EvalBroker', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('propagates cache-recovery errors from runner resolution', async () => {
+  it.each([false, true])('resolve control error: %s', async (abort) => {
     const root = mkdtempSync(join(tmpdir(), 'wyw-eval-broker-'));
     const entry = join(root, 'entry.js');
     const dep = join(root, 'dep.js');
@@ -3585,7 +3585,9 @@ describe('EvalBroker', () => {
     const nextSource = 'export const __wywPreval = { value: () => 42 };';
     writeFileSync(nextEntry, nextSource);
 
-    const recoveryError = new CacheKeySaltBusyError();
+    const recoveryError = abort
+      ? new AbortError('superseded')
+      : new CacheKeySaltBusyError();
     const asyncResolve = jest.fn(async () => {
       throw recoveryError;
     });
@@ -3614,8 +3616,11 @@ describe('EvalBroker', () => {
 
       await expect(evaluation).rejects.toBe(recoveryError);
       const error = await observedError;
-      expect(isCacheKeySaltBusyError(error)).toBe(true);
-      expect(error).toMatchObject({ code: CACHE_KEY_SALT_BUSY });
+      expect(error).toBeInstanceOf(abort ? AbortError : CacheKeySaltBusyError);
+      if (!abort) {
+        expect(isCacheKeySaltBusyError(error)).toBe(true);
+        expect(error).toMatchObject({ code: CACHE_KEY_SALT_BUSY });
+      }
       expect((await nextEvaluation).values?.get('value')).toBe(42);
       expect(asyncResolve).toHaveBeenCalled();
     } finally {
@@ -3624,7 +3629,7 @@ describe('EvalBroker', () => {
     }
   });
 
-  it('propagates cache-recovery errors from runner loading', async () => {
+  it.each([false, true])('load control error: %s', async (abort) => {
     const root = mkdtempSync(join(tmpdir(), 'wyw-eval-broker-'));
     const entry = join(root, 'entry.js');
     const dep = join(root, 'dep.js');
@@ -3635,7 +3640,9 @@ describe('EvalBroker', () => {
     writeFileSync(entry, source);
     writeFileSync(dep, 'export const value = 41;');
 
-    const recoveryError = new CacheKeySaltBusyError();
+    const recoveryError = abort
+      ? new AbortError('superseded')
+      : new CacheKeySaltBusyError();
     const asyncResolve = jest.fn(async (what: string, importer: string) =>
       what.startsWith('.') ? resolve(dirname(importer), what) : null
     );
@@ -3663,8 +3670,11 @@ describe('EvalBroker', () => {
 
       await expect(evaluation).rejects.toBe(recoveryError);
       const error = await observedError;
-      expect(isCacheKeySaltBusyError(error)).toBe(true);
-      expect(error).toMatchObject({ code: CACHE_KEY_SALT_BUSY });
+      expect(error).toBeInstanceOf(abort ? AbortError : CacheKeySaltBusyError);
+      if (!abort) {
+        expect(isCacheKeySaltBusyError(error)).toBe(true);
+        expect(error).toMatchObject({ code: CACHE_KEY_SALT_BUSY });
+      }
       expect(asyncResolve).toHaveBeenCalled();
     } finally {
       broker.dispose();
