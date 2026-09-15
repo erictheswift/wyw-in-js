@@ -811,8 +811,27 @@ export abstract class CacheFreshness<
     }
 
     const current = this.contentHashes.get(filename);
+    // A loader may change the representation of the source. Capture the raw
+    // baseline when first accepting loaded code, rather than comparing its
+    // bytes with transformed output or trusting an unchanged timestamp later.
+    // Republishing the same loaded revision must not hide an intervening edit.
+    const captureDiskBaseline =
+      source === 'loaded' && current?.loaded === undefined;
     if (current) current[source] = hash;
     else this.contentHashes.set(filename, { [source]: hash });
+
+    if (captureDiskBaseline) {
+      try {
+        const diskCode = fs.readFileSync(stripQueryAndHash(filename), 'utf8');
+        this.contentHashes.get(filename)!.fs = hashContent(diskCode);
+        // This is a baseline, not a freshness probe. The first probe must
+        // still read bytes even if the timestamp did not move.
+        this.fileMtimes.delete(filename);
+      } catch {
+        // Virtual/missing sources have no raw baseline. A later unmatched fs
+        // revision stays conservative; never infer equivalence from mtime.
+      }
+    }
 
     if (source === 'fs') {
       try {

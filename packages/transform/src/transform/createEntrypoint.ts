@@ -318,6 +318,11 @@ function innerCreateEntrypoint(
     return ['cached', cached, expectedCached, false];
   }
 
+  const reusableEntrypoint =
+    loadedCode === undefined ? cache.get('entrypoints', name) : undefined;
+  const entrypointCode = loadedCode ?? reusableEntrypoint?.initialCode;
+  assertExpectedCached();
+
   let exports = recoveredFromUnknownGraph ? undefined : cached?.exports;
   let evaluatedOnly =
     changed || recoveredFromUnknownGraph ? [] : cached?.evaluatedOnly ?? [];
@@ -354,7 +359,7 @@ function innerCreateEntrypoint(
       exports,
       generation: cached.generation + 1,
       graphTraversalToken,
-      initialCode: loadedCode,
+      initialCode: entrypointCode,
       invalidateOnDependencyChange: cached.invalidateOnDependencyChange,
       invalidationDependencies: cached.invalidationDependencies,
       loadedAndParsed: reusedLoadedAndParsed,
@@ -489,7 +494,7 @@ function innerCreateEntrypoint(
     : services.loadAndParseFn(
         services,
         name,
-        loadedCode,
+        entrypointCode,
         parent?.log ?? services.log
       );
   assertExpectedCached();
@@ -501,7 +506,7 @@ function innerCreateEntrypoint(
     const parsedInvalidation = cache.invalidateIfChangedWithDetails(
       name,
       nextOriginalCode,
-      loadedCode === undefined ? 'fs' : 'loaded',
+      entrypointCode === undefined ? 'fs' : 'loaded',
       graphTraversalToken,
       cacheEpoch
     );
@@ -563,7 +568,7 @@ function innerCreateEntrypoint(
     exports,
     generation: cached ? cached.generation + 1 : 1,
     graphTraversalToken,
-    initialCode: loadedCode,
+    initialCode: entrypointCode,
     invalidateOnDependencyChange: retainedInvalidateOnDependencyChange,
     invalidationDependencies: retainedInvalidationDependencies,
     loadedAndParsed: nextLoadedAndParsed,
