@@ -26,6 +26,8 @@ import type { Services } from './types';
 export type CreateEntrypointOptions = {
   /** @internal Keep a foreign source transaction live while creating a root. */
   externalEntrypoint?: Entrypoint;
+  /** @internal Import analysis must not interrupt an executing generation. */
+  isAnalysis?: boolean;
   graphTraversalToken?: object;
   mergeCachedOnly?: boolean;
 };
@@ -409,7 +411,7 @@ function innerCreateEntrypoint(
     );
 
     if (factory.isProcessing(cached)) {
-      if (parent === null) {
+      if (parent === null && !options.isAnalysis) {
         cached.log(
           'is being processed during root request, supersede immediately (%o -> %o)',
           cached.only,

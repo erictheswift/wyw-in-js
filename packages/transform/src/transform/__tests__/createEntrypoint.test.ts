@@ -1,6 +1,7 @@
 import type { Services } from '../types';
 import { createActionContext, disposeActionContext } from '../ActionContext';
 import { EventEmitter } from '../../utils/EventEmitter';
+import { Entrypoint } from '../Entrypoint';
 import { AbortError } from '../actions/AbortError';
 
 import { createEntrypoint, createServices } from './entrypoint-helpers';
@@ -466,6 +467,31 @@ describe('createEntrypoint', () => {
     } finally {
       entrypoint1.endProcessing();
     }
+  });
+
+  it('defers analysis-only widening until the active generation finishes', () => {
+    const name = '/foo/analysis-during-processing.js';
+    const entrypoint = createEntrypoint(services, name, ['__wywPreval'], '');
+    entrypoint.beginProcessing();
+    try {
+      const analysis = Entrypoint.createRoot(
+        services,
+        name,
+        ['named'],
+        undefined,
+        {
+          isAnalysis: true,
+        }
+      );
+      expect(analysis).toBe(entrypoint);
+      expect(entrypoint.supersededWith).toBeNull();
+      expect(entrypoint.only).toEqual(['__wywPreval']);
+    } finally {
+      entrypoint.endProcessing();
+    }
+    const next = entrypoint.applyDeferredSupersede();
+    expect(next?.only).toEqual(['__wywPreval', 'named']);
+    expect(services.cache.get('entrypoints', name)).toBe(next);
   });
 
   it('should call callback if entrypoint was superseded', () => {

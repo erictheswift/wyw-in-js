@@ -41,6 +41,7 @@ export function* resolveDependency(
           undefined,
           {
             externalEntrypoint: action.entrypoint,
+            isAnalysis: true,
             graphTraversalToken:
               action.entrypoint.getGraphTraversalTokenForServices(
                 action.services
