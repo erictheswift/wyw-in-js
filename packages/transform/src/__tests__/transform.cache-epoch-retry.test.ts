@@ -85,6 +85,9 @@ describe('transform cache recovery retries', () => {
         runNonConvergingTransform(cache, attempts)
       ).rejects.toMatchObject({
         code: 'WYW_CACHE_RECOVERY_DID_NOT_CONVERGE',
+        ownedRetries: 3,
+        totalRetries: 3,
+        limit: 'owned',
       });
 
       expect(attempts).toHaveLength(4);
@@ -117,6 +120,9 @@ describe('transform cache recovery retries', () => {
       expect(consoleError).toHaveBeenCalledTimes(1);
       expect(consoleError.mock.calls[0][1]).toMatchObject({
         code: 'WYW_CACHE_RECOVERY_DID_NOT_CONVERGE',
+        ownedRetries: 3,
+        totalRetries: 3,
+        limit: 'owned',
       });
     } finally {
       consoleError.mockRestore();
@@ -178,7 +184,7 @@ describe('transform cache recovery retries', () => {
     }
   });
 
-  it('does not spend a healthy root retry budget on other roots recoveries', async () => {
+  it.each([4, 32, 100])('survives %i foreign resets', async (count) => {
     const cache = new TransformCacheCollection();
     let attemptStarted = createDeferred();
     let releaseAttempt = createDeferred();
@@ -200,7 +206,7 @@ describe('transform cache recovery retries', () => {
     );
 
     try {
-      for (let recoveryIndex = 0; recoveryIndex < 4; recoveryIndex += 1) {
+      for (let recoveryIndex = 0; recoveryIndex < count; recoveryIndex += 1) {
         // eslint-disable-next-line no-await-in-loop
         await attemptStarted.promise;
         const currentRelease = releaseAttempt;
@@ -246,9 +252,63 @@ describe('transform cache recovery retries', () => {
       expect(outcome).toEqual({ kind: 'retry' });
       releaseAttempt.resolve();
       await expect(healthy).resolves.toMatchObject({ code: 'healthy' });
-      expect(healthyAttempts).toBe(5);
+      expect(healthyAttempts).toBe(count + 1);
     } finally {
       releaseAttempt.resolve();
+      disposeEvalBroker(cache);
+    }
+  });
+  it.each([false, true])('bounds total retries (soft: %s)', async (soft) => {
+    const cache = new TransformCacheCollection();
+    const foreignOwner = {};
+    let attempts = 0;
+    let cause: Error | undefined;
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    // eslint-disable-next-line require-yield
+    function* workflow(this: Attempt) {
+      attempts += 1;
+      const recovery = cache.startUnknownGraphRecovery(
+        this.entrypoint.name,
+        new Set(['/abs/foreign-missing.ts']),
+        this.entrypoint.originalCode,
+        cache.createGraphTraversalToken(this.services.cacheEpoch!, foreignOwner)
+      );
+      recovery.complete();
+      cause = recovery.abortError;
+      throw cause;
+    }
+
+    try {
+      const running = runTransformWithWorkflow(cache, workflow, soft);
+      const expected = {
+        code: 'WYW_CACHE_RECOVERY_DID_NOT_CONVERGE',
+        ownedRetries: 0,
+        totalRetries: 100,
+        limit: 'total',
+      };
+      if (soft) {
+        await expect(running).resolves.toEqual({
+          code: 'export default 1;',
+          sourceMap: undefined,
+        });
+        expect(consoleError).toHaveBeenCalledTimes(1);
+        expect(consoleError.mock.calls[0][1]).toMatchObject({
+          ...expected,
+          cause,
+        });
+      } else {
+        await expect(running).rejects.toMatchObject(expected);
+        await expect(running).rejects.toHaveProperty('cause', cause);
+        expect(consoleError).not.toHaveBeenCalled();
+      }
+      expect(attempts).toBe(101);
+      const release = cache.tryAcquireKeySalt('after-convergence-error');
+      expect(release).not.toBeNull();
+      release?.();
+    } finally {
+      consoleError.mockRestore();
       disposeEvalBroker(cache);
     }
   });

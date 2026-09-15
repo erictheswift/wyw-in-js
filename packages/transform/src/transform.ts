@@ -49,6 +49,7 @@ type PartialServices = Partial<Omit<Services, 'cacheEpoch' | 'options'>> & {
 type AllHandlers<TMode extends 'async' | 'sync'> = Handlers<TMode>;
 
 const MAX_CACHE_RECOVERY_RETRIES = 3;
+const MAX_TOTAL_CACHE_RECOVERY_RETRIES = 100;
 
 interface ActiveCacheKeySaltLease {
   active: boolean;
@@ -207,6 +208,7 @@ const executeTransform = async (
 
     return await activeCacheKeySaltLeases.run(activeLease, async () => {
       const retriedEpochs = new Set<number>();
+      const allRetriedEpochs = new Set<number>();
 
       for (;;) {
         let cacheEpoch: TransformCacheEpoch | undefined;
@@ -248,10 +250,13 @@ const executeTransform = async (
 
           if (
             ownedEpochAbort &&
+            !allRetriedEpochs.has(ownedEpochAbort.toEpoch) &&
+            allRetriedEpochs.size < MAX_TOTAL_CACHE_RECOVERY_RETRIES &&
             (!consumesRetryBudget ||
               (!retriedEpochs.has(ownedEpochAbort.toEpoch) &&
                 retriedEpochs.size < MAX_CACHE_RECOVERY_RETRIES))
           ) {
+            allRetriedEpochs.add(ownedEpochAbort.toEpoch);
             if (consumesRetryBudget) {
               retriedEpochs.add(ownedEpochAbort.toEpoch);
             }
@@ -262,7 +267,14 @@ const executeTransform = async (
             ? new CacheRecoveryConvergenceError(
                 options.filename,
                 retriedEpochs.size,
-                ownedEpochAbort
+                ownedEpochAbort,
+                {
+                  totalRetries: allRetriedEpochs.size,
+                  limit:
+                    allRetriedEpochs.size >= MAX_TOTAL_CACHE_RECOVERY_RETRIES
+                      ? 'total'
+                      : 'owned',
+                }
               )
             : error;
         }
