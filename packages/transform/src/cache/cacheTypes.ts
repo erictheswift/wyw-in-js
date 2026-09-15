@@ -20,7 +20,7 @@ export interface IBaseCachedEntrypoint {
 export type EntrypointDependencySnapshot = Pick<
   IBaseCachedEntrypoint,
   'dependencies' | 'invalidationDependencies' | 'invalidateOnDependencyChange'
->;
+> & { invalidationVersion?: number };
 
 export const hashContent = (content: string): string => {
   const cached = getPipelineCodeSha256Hex(content);

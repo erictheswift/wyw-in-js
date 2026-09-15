@@ -47,6 +47,15 @@ export abstract class CacheFreshness<
     EntrypointDependencySnapshot
   >();
 
+  private invalidationVersion = 0;
+
+  private readonly changedFileVersions = new Map<string, number>();
+
+  private readonly entrypointInvalidationVersions = new WeakMap<
+    object,
+    number
+  >();
+
   private invalidatedFiles = new Map<string, number>();
 
   private consumedInvalidationVersions = new Map<string, number>();
@@ -170,6 +179,16 @@ export abstract class CacheFreshness<
   ): void {
     if (cacheName === 'entrypoints') {
       this.publishedEntrypoints.add(this.getKey(key));
+      if (
+        value &&
+        typeof value === 'object' &&
+        !this.entrypointInvalidationVersions.has(value)
+      ) {
+        this.entrypointInvalidationVersions.set(
+          value,
+          this.invalidationVersion
+        );
+      }
     }
     if (value && typeof value === 'object' && 'initialCode' in value) {
       const entrypoint = value as {
@@ -214,6 +233,7 @@ export abstract class CacheFreshness<
     this.pendingContentHashSynchronizations.clear();
     this.fileMtimes.clear();
     this.invalidatedFiles.clear();
+    this.changedFileVersions.clear();
     this.consumedInvalidationVersions.clear();
   }
 
@@ -238,6 +258,8 @@ export abstract class CacheFreshness<
       );
 
     this.entrypointDependencySnapshots.set(this.getKey(filename), {
+      invalidationVersion:
+        this.entrypointInvalidationVersions.get(entrypoint) ?? 0,
       dependencies: copy(entrypoint.dependencies),
       invalidationDependencies: copy(entrypoint.invalidationDependencies),
       invalidateOnDependencyChange: new Set(
@@ -253,6 +275,12 @@ export abstract class CacheFreshness<
   ): void {
     if (previous && previous !== value) {
       this.snapshotEntrypointDependencies(key, previous);
+      if (!this.entrypointInvalidationVersions.has(value)) {
+        this.entrypointInvalidationVersions.set(
+          value,
+          this.entrypointInvalidationVersions.get(previous) ?? 0
+        );
+      }
     }
   }
 
@@ -264,6 +292,15 @@ export abstract class CacheFreshness<
       }
     );
     this.markInvalidated(filename);
+  }
+
+  private invalidateChangedFile(filename: string): void {
+    this.invalidateForFile(filename);
+    this.invalidationVersion += 1;
+    this.changedFileVersions.set(
+      stripQueryAndHash(filename),
+      this.invalidationVersion
+    );
   }
 
   protected markInvalidated(filename: string): void {
@@ -410,7 +447,8 @@ export abstract class CacheFreshness<
             invalidateOnDependencyChange?.has(dependencyFilename) ||
             false,
           graphTraversalToken,
-          dependency.readOnly === true
+          dependency.readOnly === true,
+          this.getEntrypointInvalidationVersion(filename, fileEntrypoint)
         );
         if (dependencyChanged && !changedFiles.has(dependencyFilename)) {
           anyDepGraphUnknown = true;
@@ -425,7 +463,7 @@ export abstract class CacheFreshness<
             'dependency affecting output has changed, invalidate all for %s',
             filename
           );
-          this.invalidateForFile(filename);
+          this.invalidateChangedFile(filename);
           changedFiles.add(filename);
           return true;
         } else if (dependencyChanged) {
@@ -455,7 +493,7 @@ export abstract class CacheFreshness<
     if (contentChanged || anyDepChanged) {
       cacheLogger('content has changed, invalidate all for %s', filename);
       this.setContentHash(filename, source, newHash);
-      this.invalidateForFile(filename);
+      this.invalidateChangedFile(filename);
       if (contentChanged) {
         this.forgetEntrypointDependencySnapshot(filename);
         this.expectContentHashSynchronization(
@@ -473,6 +511,16 @@ export abstract class CacheFreshness<
       this.setContentHash(filename, source, newHash);
     }
     return anyDepGraphUnknown;
+  }
+
+  private getEntrypointInvalidationVersion(
+    filename: string,
+    entrypoint?: TEntrypoint
+  ): number {
+    return entrypoint
+      ? this.entrypointInvalidationVersions.get(entrypoint) ?? 0
+      : this.entrypointDependencySnapshots.get(this.getKey(filename))
+          ?.invalidationVersion ?? this.invalidationVersion;
   }
 
   private getDependenciesToCheck(
@@ -565,13 +613,13 @@ export abstract class CacheFreshness<
     unknownDependencyGraphs: Set<string>,
     forceContentCheck = false,
     graphTraversalToken?: object,
-    readOnly = false
+    readOnly = false,
+    consumerInvalidationVersion = this.invalidationVersion
   ): boolean {
     if (changedFiles.has(dependencyFilename)) return true;
-
     const memoKey = `${forceContentCheck ? 'forced' : 'normal'}\0${
       readOnly ? 'read' : 'graph'
-    }\0${dependencyFilename}`;
+    }\0${consumerInvalidationVersion}\0${dependencyFilename}`;
     const memoized = dependencyChangeMemo.get(memoKey);
     if (memoized !== undefined) return memoized;
     if (visitedFiles.has(dependencyFilename)) return false;
@@ -602,6 +650,16 @@ export abstract class CacheFreshness<
     );
     if (!hasKnownGraph && !allowUnknownGraph) {
       unknownDependencyGraphs.add(dependencyFilename);
+    }
+
+    // Another consumer may already have refreshed this file's shared hash.
+    // That does not make outputs published before its invalidation current.
+    if (
+      (this.changedFileVersions.get(stripQueryAndHash(dependencyFilename)) ??
+        0) > consumerInvalidationVersion
+    ) {
+      changedFiles.add(dependencyFilename);
+      return true;
     }
 
     if (cachedMtime !== undefined) {
@@ -678,11 +736,15 @@ export abstract class CacheFreshness<
                   ) ||
                   false,
                 graphTraversalToken,
-                nestedDependency.readOnly === true
+                nestedDependency.readOnly === true,
+                this.getEntrypointInvalidationVersion(
+                  dependencyFilename,
+                  cachedEntrypoint
+                )
               )
             ) {
               if (changedFiles.has(nestedDependency.resolved)) {
-                this.invalidateForFile(dependencyFilename);
+                this.invalidateChangedFile(dependencyFilename);
                 changedFiles.add(dependencyFilename);
                 dependencyChangeMemo.set(memoKey, true);
                 return true;
@@ -749,7 +811,7 @@ export abstract class CacheFreshness<
     memo: Map<string, boolean>,
     memoKey: string
   ): true {
-    this.invalidateForFile(filename);
+    this.invalidateChangedFile(filename);
     this.forgetEntrypointDependencySnapshot(filename);
     changedFiles.add(filename);
     memo.set(memoKey, true);
@@ -769,7 +831,7 @@ export abstract class CacheFreshness<
       content = fs.readFileSync(strippedFilename, 'utf8');
     } catch (error) {
       if (!isMissingFileError(error)) throw error;
-      this.invalidateForFile(filename);
+      this.invalidateChangedFile(filename);
       this.forgetEntrypointDependencySnapshot(filename);
       changedFiles.add(filename);
       return true;
@@ -779,7 +841,7 @@ export abstract class CacheFreshness<
     if (previousHash === nextHash) return false;
 
     this.setContentHash(filename, 'fs', nextHash);
-    this.invalidateForFile(filename);
+    this.invalidateChangedFile(filename);
     this.forgetEntrypointDependencySnapshot(filename);
     this.expectContentHashSynchronization(
       filename,
@@ -832,7 +894,7 @@ export abstract class CacheFreshness<
       return this.invalidateIfChanged(filename, content, undefined, 'fs');
     } catch (error) {
       if (!isMissingFileError(error)) throw error;
-      this.invalidateForFile(filename);
+      this.invalidateChangedFile(filename);
       this.forgetEntrypointDependencySnapshot(filename);
       return true;
     }

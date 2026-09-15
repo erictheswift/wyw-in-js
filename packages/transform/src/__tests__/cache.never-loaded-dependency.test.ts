@@ -128,6 +128,26 @@ describe('TransformCacheCollection: dependency that was never an entrypoint', ()
     expect(cache.get('entrypoints', parentName)).toBeUndefined();
   });
 
+  it.each([false, true])('invalidates all consumers: %s', (replace) => {
+    const secondParent = 'second-parent.js';
+    cache.add('entrypoints', secondParent, {
+      ...cache.get('entrypoints', parentName)!,
+      name: secondParent,
+    });
+    expect(checkParent().changed).toBe(false);
+    expect(cache.invalidateIfChanged(secondParent, parentContent)).toBe(false);
+    resetContentOnDisk = 'export const reset = "* { margin: 1px }";';
+    expect(checkParent().changed).toBe(true);
+    if (replace) {
+      cache.add('entrypoints', secondParent, {
+        ...cache.get('entrypoints', secondParent)!,
+        generation: 2,
+      });
+    }
+    expect(cache.invalidateIfChanged(secondParent, parentContent)).toBe(true);
+    expect(cache.get('entrypoints', secondParent)).toBeUndefined();
+  });
+
   it('still detects a content change behind an unchanged mtime', () => {
     // invalidateOnDependencyChange forces a hash check for this file.
     resetContentOnDisk = 'export const reset = "* { margin: 1px }";';
