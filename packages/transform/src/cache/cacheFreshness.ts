@@ -361,6 +361,7 @@ export abstract class CacheFreshness<
     const visitedFiles = new Set(previousVisitedFiles);
     const fileEntrypoint = this.getEntrypoint(filename);
     let anyDepChanged = false;
+    let anyDepGraphUnknown = false;
 
     if (
       !visitedFiles.has(filename) &&
@@ -395,7 +396,12 @@ export abstract class CacheFreshness<
             false,
           graphTraversalToken
         );
-        if (
+        if (dependencyChanged && !changedFiles.has(dependencyFilename)) {
+          anyDepGraphUnknown = true;
+          // Unknown is not evidence of a changed dependency. Keep the active
+          // generation so it can complete the graph; the caller still sees
+          // the unknown graph and must not reuse it without recovery.
+        } else if (
           dependencyChanged &&
           invalidateOnDependencyChange?.has(dependencyFilename)
         ) {
@@ -406,8 +412,9 @@ export abstract class CacheFreshness<
           this.invalidateForFile(filename);
           changedFiles.add(filename);
           return true;
+        } else if (dependencyChanged) {
+          anyDepChanged = true;
         }
-        if (dependencyChanged) anyDepChanged = true;
       }
     }
 
@@ -449,7 +456,7 @@ export abstract class CacheFreshness<
     if (previousHash !== newHash) {
       this.setContentHash(filename, source, newHash);
     }
-    return false;
+    return anyDepGraphUnknown;
   }
 
   private getDependenciesToCheck(
@@ -608,6 +615,7 @@ export abstract class CacheFreshness<
           return true;
         }
 
+        let nestedGraphIsUnknown = false;
         if (dependencies.size > 0) {
           const nextVisitedFiles = new Set(visitedFiles);
           nextVisitedFiles.add(dependencyFilename);
@@ -628,10 +636,13 @@ export abstract class CacheFreshness<
                 graphTraversalToken
               )
             ) {
-              this.invalidateForFile(dependencyFilename);
-              changedFiles.add(dependencyFilename);
-              dependencyChangeMemo.set(memoKey, true);
-              return true;
+              if (changedFiles.has(nestedDependency.resolved)) {
+                this.invalidateForFile(dependencyFilename);
+                changedFiles.add(dependencyFilename);
+                dependencyChangeMemo.set(memoKey, true);
+                return true;
+              }
+              nestedGraphIsUnknown = true;
             }
           }
         }
@@ -644,8 +655,8 @@ export abstract class CacheFreshness<
           dependencyChangeMemo.set(memoKey, !allowUnknownGraph);
           return !allowUnknownGraph;
         }
-        dependencyChangeMemo.set(memoKey, false);
-        return false;
+        dependencyChangeMemo.set(memoKey, nestedGraphIsUnknown);
+        return nestedGraphIsUnknown;
       }
     }
 
