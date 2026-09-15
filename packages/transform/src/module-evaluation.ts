@@ -495,6 +495,9 @@ export class ModuleEvaluation {
           createReentrantEvaluationCycleError(this.host.filename)
         );
       }
+      if (activeScope && this.evaluationFlight) {
+        this.evaluationFlight.leasePromotion.request(activeScope);
+      }
       return this.evaluationPromise;
     }
 

@@ -489,7 +489,7 @@ it('shares an active evaluation across Module instances', async () => {
   expect(entrypoint.exports.value).toBe(42);
 });
 
-it('promotes a queued single flight into a reentrant evaluation lease', async () => {
+it.each([false, true])('promotes queued flight: %s', async (same) => {
   const cache = new TransformCacheCollection();
   let dependencyEvaluations = 0;
   let rootEvaluations = 0;
@@ -518,10 +518,14 @@ it('promotes a queued single flight into a reentrant evaluation lease', async ()
     ['*'],
     'recordDependencyEvaluation(); export default 42;'
   );
+  const dependencyModule = new Module(dependencyServices, dependency);
   rootServices.options.pluginOptions.eval = {
     customResolver: async (specifier) => {
       if (specifier !== './active-flight-dependency') return null;
-      await new Module(dependencyServices, dependency).evaluate();
+      await (same
+        ? dependencyModule
+        : new Module(dependencyServices, dependency)
+      ).evaluate();
       return { external: true, id: dependencyFilename };
     },
     resolver: 'custom',
@@ -534,10 +538,7 @@ it('promotes a queued single flight into a reentrant evaluation lease', async ()
   );
 
   const rootRunning = new Module(rootServices, root).evaluate();
-  const dependencyRunning = new Module(
-    dependencyServices,
-    dependency
-  ).evaluate();
+  const dependencyRunning = dependencyModule.evaluate();
   let timeoutId!: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_resolve, reject) => {
     timeoutId = setTimeout(
