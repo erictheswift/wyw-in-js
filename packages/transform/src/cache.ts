@@ -52,6 +52,9 @@ export class TransformCacheCollection<
     super(caches.epochOwner);
     this.barrelManifests = caches.barrelManifests || new Map();
     this.entrypoints = caches.entrypoints || new Map();
+    this.entrypoints.forEach((_value, key) =>
+      this.publishedEntrypoints.add(key)
+    );
     this.exports = caches.exports || new Map();
   }
 

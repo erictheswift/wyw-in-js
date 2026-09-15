@@ -10,6 +10,8 @@ export interface IBaseCachedEntrypoint {
   hasTransformResult?: boolean;
   initialCode?: string;
   isProcessing?: boolean;
+  processingStarted?: boolean;
+  loadedAndParsed?: { evaluator: unknown; reason?: string };
   invalidateOnDependencyChange?: Set<string>;
   invalidationDependencies?: Map<string, { resolved: string | null }>;
   transformed?: boolean;
@@ -32,6 +34,10 @@ export const hashContent = (content: string): string => {
 export const isEntrypointGraphIncomplete = (
   entrypoint: IBaseCachedEntrypoint | undefined
 ): boolean =>
+  !(
+    entrypoint?.loadedAndParsed?.evaluator === 'ignored' &&
+    entrypoint.loadedAndParsed.reason === 'extension'
+  ) &&
   Boolean(
     entrypoint?.isProcessing ||
       entrypoint?.transformed === false ||

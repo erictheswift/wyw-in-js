@@ -58,6 +58,8 @@ export class Entrypoint extends BaseEntrypoint {
 
   #isProcessing = false;
 
+  #processingStarted = false;
+
   #invalidationError: Error | null = null;
 
   readonly #cacheLifecycleVersion: number;
@@ -156,6 +158,10 @@ export class Entrypoint extends BaseEntrypoint {
     return (
       this.#hasTransformResult || this.supersededWith?.transformed || false
     );
+  }
+
+  public get processingStarted(): boolean {
+    return this.#processingStarted;
   }
 
   public get isProcessing(): boolean {
@@ -434,6 +440,7 @@ export class Entrypoint extends BaseEntrypoint {
   }
 
   public beginProcessing() {
+    this.#processingStarted = true;
     this.#isProcessing = true;
     if (!this.#processingPromise) {
       this.#processingPromise = new Promise<void>((resolve) => {

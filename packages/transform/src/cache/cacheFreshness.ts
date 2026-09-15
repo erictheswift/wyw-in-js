@@ -13,6 +13,11 @@ import { stripQueryAndHash } from '../utils/parseRequest';
 
 const cacheLogger = logger.extend('cache');
 
+interface DependencyToCheck {
+  resolved: string | null;
+  readOnly?: boolean;
+}
+
 export interface PendingUnknownGraph {
   dependencies: Set<string>;
   recoveryToken: object;
@@ -32,6 +37,8 @@ export abstract class CacheFreshness<
   >();
 
   private fileMtimes = new Map<string, number>();
+
+  protected readonly publishedEntrypoints = new Set<string>();
 
   private readonly exportDependencies = new Map<string, Set<string>>();
 
@@ -111,6 +118,7 @@ export abstract class CacheFreshness<
   }
 
   protected clearFreshnessForKeySalt(): void {
+    this.publishedEntrypoints.clear();
     this.entrypointDependencySnapshots.clear();
     this.pendingContentHashSynchronizations.clear();
     this.clearFreshness('all');
@@ -144,9 +152,13 @@ export abstract class CacheFreshness<
     migrate(this.barrelManifestDependencies);
     migrate(this.entrypointDependencySnapshots);
     migrate(this.exportDependencies);
+    const published = [...this.publishedEntrypoints];
+    this.publishedEntrypoints.clear();
+    published.forEach((key) => this.publishedEntrypoints.add(remap(key)));
   }
 
   protected onEntrypointsCleared(): void {
+    this.publishedEntrypoints.clear();
     this.entrypointDependencySnapshots.clear();
     this.pendingContentHashSynchronizations.clear();
   }
@@ -156,6 +168,9 @@ export abstract class CacheFreshness<
     key: string,
     value: unknown
   ): void {
+    if (cacheName === 'entrypoints') {
+      this.publishedEntrypoints.add(this.getKey(key));
+    }
     if (value && typeof value === 'object' && 'initialCode' in value) {
       const entrypoint = value as {
         initialCode?: unknown;
@@ -394,7 +409,8 @@ export abstract class CacheFreshness<
           forceContentCheck ||
             invalidateOnDependencyChange?.has(dependencyFilename) ||
             false,
-          graphTraversalToken
+          graphTraversalToken,
+          dependency.readOnly === true
         );
         if (dependencyChanged && !changedFiles.has(dependencyFilename)) {
           anyDepGraphUnknown = true;
@@ -462,8 +478,9 @@ export abstract class CacheFreshness<
   private getDependenciesToCheck(
     filename: string,
     fileEntrypoint?: TEntrypoint
-  ): Map<string, { resolved: string | null }> {
-    const dependenciesToCheck = new Map<string, { resolved: string | null }>();
+  ): Map<string, DependencyToCheck> {
+    const dependenciesToCheck = new Map<string, DependencyToCheck>();
+    const graphDependencies = new Set<string>();
     const snapshot = this.entrypointDependencySnapshots.get(
       this.getKey(filename)
     );
@@ -475,15 +492,20 @@ export abstract class CacheFreshness<
 
     for (const [sourceIndex, source] of sources.entries()) {
       for (const [key, dependency] of source?.dependencies ?? []) {
-        dependenciesToCheck.set(
-          sources.length === 1 ? key : `${sourceIndex}:${key}`,
-          dependency
-        );
+        const graphKey = sources.length === 1 ? key : `${sourceIndex}:${key}`;
+        dependenciesToCheck.set(graphKey, { resolved: dependency.resolved });
+        if (dependency.resolved) {
+          graphDependencies.add(dependency.resolved);
+        }
       }
+
       for (const [key, dependency] of source?.invalidationDependencies ?? []) {
         const graphKey = sources.length === 1 ? key : `${sourceIndex}:${key}`;
         if (!dependenciesToCheck.has(graphKey)) {
-          dependenciesToCheck.set(graphKey, dependency);
+          dependenciesToCheck.set(graphKey, {
+            resolved: dependency.resolved,
+            readOnly: true,
+          });
         }
       }
     }
@@ -496,9 +518,19 @@ export abstract class CacheFreshness<
       ) {
         dependenciesToCheck.set(dependencyFilename, {
           resolved: dependencyFilename,
+          readOnly: true,
         });
       }
     }
+
+    // The same file can be a module-graph edge under one specifier and an
+    // invalidation dependency under another; the graph edge wins.
+    for (const dependency of dependenciesToCheck.values()) {
+      if (dependency.resolved && graphDependencies.has(dependency.resolved)) {
+        dependency.readOnly = false;
+      }
+    }
+
     return dependenciesToCheck;
   }
 
@@ -532,12 +564,13 @@ export abstract class CacheFreshness<
     dependencyChangeMemo: Map<string, boolean>,
     unknownDependencyGraphs: Set<string>,
     forceContentCheck = false,
-    graphTraversalToken?: object
+    graphTraversalToken?: object,
+    readOnly = false
   ): boolean {
     if (changedFiles.has(dependencyFilename)) return true;
 
-    const memoKey = `${
-      forceContentCheck ? 'forced' : 'normal'
+    const memoKey = `${forceContentCheck ? 'forced' : 'normal'}\0${
+      readOnly ? 'read' : 'graph'
     }\0${dependencyFilename}`;
     const memoized = dependencyChangeMemo.get(memoKey);
     if (memoized !== undefined) return memoized;
@@ -549,9 +582,20 @@ export abstract class CacheFreshness<
     const hasSnapshot = this.entrypointDependencySnapshots.has(
       this.getKey(dependencyFilename)
     );
-    const hasKnownGraph = cachedEntrypoint
-      ? !isEntrypointGraphIncomplete(cachedEntrypoint) || hasSnapshot
-      : hasSnapshot;
+    // A read-only consumer depends on the bytes it actually read, not on
+    // an analysis/in-flight module's unfinished imports. Executable edges and
+    // evicted previously-published modules still need a complete graph.
+    const isReadOnlyLeaf =
+      readOnly &&
+      (cachedEntrypoint
+        ? cachedEntrypoint.isProcessing === true ||
+          (cachedEntrypoint.processingStarted === false && !hasSnapshot)
+        : !this.publishedEntrypoints.has(this.getKey(dependencyFilename)));
+    const hasKnownGraph =
+      isReadOnlyLeaf ||
+      (cachedEntrypoint
+        ? !isEntrypointGraphIncomplete(cachedEntrypoint) || hasSnapshot
+        : hasSnapshot);
     const allowUnknownGraph = this.canTraverseUnknownGraph(
       dependencyFilename,
       graphTraversalToken
@@ -575,10 +619,10 @@ export abstract class CacheFreshness<
       }
 
       if (currentMtime === cachedMtime) {
-        const dependencies = this.getDependenciesToCheck(
-          dependencyFilename,
-          cachedEntrypoint
-        );
+        const dependencies =
+          isReadOnlyLeaf && cachedEntrypoint
+            ? new Map<string, DependencyToCheck>()
+            : this.getDependenciesToCheck(dependencyFilename, cachedEntrypoint);
         if (
           forceContentCheck &&
           this.didFileContentHashChange(
@@ -633,7 +677,8 @@ export abstract class CacheFreshness<
                     nestedDependency.resolved
                   ) ||
                   false,
-                graphTraversalToken
+                graphTraversalToken,
+                nestedDependency.readOnly === true
               )
             ) {
               if (changedFiles.has(nestedDependency.resolved)) {
@@ -676,7 +721,9 @@ export abstract class CacheFreshness<
     const invalidated = this.invalidateIfChangedInternal(
       dependencyFilename,
       dependencyContent,
-      visitedFiles,
+      isReadOnlyLeaf && cachedEntrypoint
+        ? new Set([...visitedFiles, dependencyFilename])
+        : visitedFiles,
       'fs',
       changedFiles,
       dependencyChangeMemo,
