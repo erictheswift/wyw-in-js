@@ -146,7 +146,10 @@ export const assertSourceMaps = async (pkgDir, useRspack) => {
                   line: prefix.split('\n').length,
                   column: prefix.length - prefix.lastIndexOf('\n') - 1,
                 });
-                assert(original.source.endsWith(suffix));
+                assert(
+                  original.source.replaceAll('\\', '/').endsWith(suffix),
+                  `Expected ${suffix}, mapped to ${original.source}`
+                );
                 assert.equal(original.line, line);
               }
             });
