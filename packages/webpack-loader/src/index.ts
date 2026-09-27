@@ -477,7 +477,12 @@ const webpack5Loader: Loader = function webpack5LoaderPlugin(
             }
             outputLoaderQuery.set(
               'outputCssPayload',
-              encodeOutputCssPayload({ cssText })
+              encodeOutputCssPayload({
+                cssText: result.cssText,
+                ...(sourceMap && result.cssSourceMapText
+                  ? { cssSourceMapText: result.cssSourceMapText }
+                  : {}),
+              })
             );
             const outputLoaderOptions = outputLoaderQuery.toString();
             const outputLoaderRequest = outputLoaderOptions

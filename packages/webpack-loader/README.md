@@ -33,6 +33,47 @@ module.exports = {
 };
 ```
 
+## Extracted CSS source maps
+
+The loader's `sourceMap: true` option generates mappings from CSS back to the original JavaScript or TypeScript. The CSS pipeline must also compose and emit those maps. With webpack, a standard extraction setup is:
+
+```js
+const MiniCssExtractPlugin = require('mini-css-extract-plugin');
+
+module.exports = {
+  devtool: 'source-map',
+  module: {
+    rules: [
+      {
+        test: /\.js$/,
+        use: [
+          { loader: '@wyw-in-js/webpack-loader', options: { sourceMap: true } },
+        ],
+      },
+      {
+        test: /\.wyw-in-js\.css$/,
+        use: [MiniCssExtractPlugin.loader, 'css-loader'],
+      },
+    ],
+  },
+  plugins: [new MiniCssExtractPlugin()],
+};
+```
+
+Install `css-loader` and `mini-css-extract-plugin` alongside this loader. If you use `postcss-loader`, place it after `css-loader` in `use` and set css-loader's `importLoaders: 1`. Webpack's source-map tooling enables mapping in both loaders by default; an explicit `sourceMap: false` overrides that default.
+
+`eval` and `eval-source-map` devtools do not emit maps for extracted CSS. To retain an eval-based JavaScript devtool, add this plugin instead of switching to `devtool: 'source-map'`:
+
+```js
+new webpack.SourceMapDevToolPlugin({ test: /\.css$/, filename: '[file].map' });
+```
+
+Here `webpack` is `require('webpack')`; keep `MiniCssExtractPlugin` in the plugins list. This emits CSS maps while retaining the existing JavaScript devtool. Do not add this plugin when `devtool: 'source-map'` already supplies it.
+
+For Rspack, use its `CssExtractRspackPlugin` and `SourceMapDevToolPlugin`. When combining a CSS-only map plugin with an eval-based devtool, explicitly set `sourceMap: true` on `css-loader` and, if present, `postcss-loader`: Rspack does not infer those loader settings from the CSS-only plugin.
+
+The output loader passes the map through the loader callback, separately from CSS. The final `.css.map` includes original source text; CSS does not need per-file inline map comments. Consumers that emit CSS as a raw `asset/resource` do not compose these loader maps; use a CSS extraction pipeline for source navigation.
+
 ## Eval resolver modes
 
 `eval.resolver: 'native'` and the native step of `eval.resolver: 'hybrid'` use `oxc-resolver` with automatic

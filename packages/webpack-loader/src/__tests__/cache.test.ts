@@ -131,3 +131,30 @@ describe('webpack-loader cache keys', () => {
     );
   });
 });
+
+describe('output CSS source map payload', () => {
+  it('round-trips maps and gives source-only changes distinct identities', () => {
+    const first = {
+      cssText: '.title{color:red}',
+      cssSourceMapText: JSON.stringify({
+        version: 3,
+        sources: ['entry.tsx'],
+        sourcesContent: ['first source'],
+        names: [],
+        mappings: 'AAAA',
+      }),
+    };
+    const second = {
+      ...first,
+      cssSourceMapText: first.cssSourceMapText.replace(
+        'first source',
+        'second source'
+      ),
+    };
+    const firstEncoded = encodeOutputCssPayload(first);
+    const secondEncoded = encodeOutputCssPayload(second);
+    expect(firstEncoded).not.toBe(secondEncoded);
+    expect(decodeOutputCssPayload(firstEncoded)).toEqual(first);
+    expect(decodeOutputCssPayload(secondEncoded)).toEqual(second);
+  });
+});

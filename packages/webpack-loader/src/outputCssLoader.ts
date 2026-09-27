@@ -21,7 +21,13 @@ export default async function outputCssLoader(
     // does not need to duplicate machine-specific absolute paths.
     if (outputCssPayload) {
       const payload = decodeOutputCssPayload(outputCssPayload);
-      this.callback(null, payload.cssText);
+      this.callback(
+        null,
+        payload.cssText,
+        payload.cssSourceMapText
+          ? JSON.parse(payload.cssSourceMapText)
+          : undefined
+      );
       return;
     }
 

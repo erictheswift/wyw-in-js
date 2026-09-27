@@ -27,12 +27,17 @@ describe('webpack-loader CSS request identity', () => {
     const { default: webpackLoader } = await import('../index');
     const resourcePath = '/abs/entry.jsx';
 
-    const run = async (cssText: string, hot: boolean) => {
+    const run = async (
+      cssText: string,
+      hot: boolean,
+      cssSourceMapText = '',
+      sourceMap = false
+    ) => {
       transformMock.mockResolvedValueOnce({
         code: 'module.exports = 1;',
         sourceMap: null,
         cssText,
-        cssSourceMapText: '',
+        cssSourceMapText,
         dependencies: [],
       });
 
@@ -62,7 +67,7 @@ describe('webpack-loader CSS request identity', () => {
             context: process.cwd(),
             emitWarning: jest.fn(),
             getDependencies: () => [],
-            getOptions: () => ({}),
+            getOptions: () => ({ sourceMap }),
             getResolve: () =>
               jest.fn(
                 (
@@ -96,5 +101,24 @@ describe('webpack-loader CSS request identity', () => {
     expect(coldReq1).not.toEqual(coldReq2);
     expect(coldReq1).toEqual(hotReq1);
     expect(coldReq2).toEqual(hotReq2);
+    const first = JSON.stringify({
+      version: 3,
+      sources: ['entry.jsx'],
+      sourcesContent: ['first'],
+      names: [],
+      mappings: 'AAAA',
+    });
+    const second = first.replace('first', 'second');
+    const hotMap1 = await run('.title{color:red}', true, first, true);
+    const hotMap2 = await run('.title{color:red}', true, second, true);
+    const coldMap1 = await run('.title{color:red}', false, first, true);
+    const coldMap2 = await run('.title{color:red}', false, second, true);
+    expect(hotMap1).not.toEqual(hotMap2);
+    expect(coldMap1).toEqual(hotMap1);
+    expect(coldMap2).toEqual(hotMap2);
+    expect(await run('.title{color:red}', true, first, false)).toEqual(hotReq1);
+    expect(await run('.title{color:red}', false, second, false)).toEqual(
+      coldReq1
+    );
   });
 });
