@@ -27,6 +27,7 @@ import { Entrypoint } from './transform/Entrypoint';
 import { asyncActionRunner } from './transform/actions/actionRunner';
 import { baseHandlers } from './transform/generators';
 import { withDefaultServices } from './transform/helpers/withDefaultServices';
+import { disposeEvalBroker } from './eval/broker';
 import type { Handlers, Services } from './transform/types';
 import { configureEvalSession, getEvalCacheKey } from './transform/evalSession';
 import { isCacheEpochAbortedError } from './transform/actions/CacheEpochAbortedError';
@@ -160,6 +161,7 @@ const executeTransform = async (
   )
     ? partialServices.cache ?? new TransformCacheCollection()
     : new TransformCacheCollection();
+  const ownsCache = configuredCache !== partialServices.cache;
   const inheritedLeases = activeCacheKeySaltLeases.getStore();
   const parentLease = findActiveCacheKeySaltLease(inheritedLeases);
   const configuredCacheOwner = configuredCache.getCurrentEpoch().owner;
@@ -300,6 +302,9 @@ const executeTransform = async (
       activeLease.active = false;
     }
     releaseKeySalt?.();
+    if (ownsCache) {
+      disposeEvalBroker(configuredCache);
+    }
   }
 };
 
