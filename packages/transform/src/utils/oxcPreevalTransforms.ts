@@ -932,9 +932,30 @@ function findLastAncestor(
   return null;
 }
 
-const findRemovableOwner = (node: Node, ancestors: Node[]): Node => {
+const isSoleStatementBody = (owner: Node, parent: Node | null): boolean => {
+  switch (parent?.type) {
+    case 'IfStatement':
+      return parent.consequent === owner || parent.alternate === owner;
+    case 'ForStatement':
+    case 'ForInStatement':
+    case 'ForOfStatement':
+    case 'WhileStatement':
+    case 'DoWhileStatement':
+    case 'LabeledStatement':
+      return parent.body === owner;
+    default:
+      return false;
+  }
+};
+
+const removeOwner = (node: Node, ancestors: Node[]): Replacement => {
   let owner: Node = node;
-  let ownerAncestorIndex = -1;
+  // `node` is the visited node (not yet on the stack) or a promise-callback
+  // owner taken from the stack; either way its parent precedes it.
+  let ownerAncestorIndex = ancestors.lastIndexOf(node);
+  if (ownerAncestorIndex === -1) {
+    ownerAncestorIndex = ancestors.length;
+  }
 
   if (!removableOwnerTypes.has(node.type)) {
     for (let idx = ancestors.length - 1; idx >= 0; idx -= 1) {
@@ -954,10 +975,14 @@ const findRemovableOwner = (node: Node, ancestors: Node[]): Node => {
     'declaration' in parent &&
     parent.declaration === owner
   ) {
-    return parent;
+    return { start: parent.start, end: parent.end, value: '' };
   }
 
-  return owner;
+  return {
+    start: owner.start,
+    end: owner.end,
+    value: isSoleStatementBody(owner, parent) ? '{}' : '',
+  };
 };
 
 type ExportedBindingProtection = {
@@ -1755,8 +1780,7 @@ export const collectDangerousCodeReplacementsWithOxc = (
           return;
         }
 
-        const owner = findRemovableOwner(node, ancestors);
-        replacements.push({ start: owner.start, end: owner.end, value: '' });
+        replacements.push(removeOwner(node, ancestors));
         return;
       }
 
@@ -1871,10 +1895,7 @@ export const collectDangerousCodeReplacementsWithOxc = (
       }
 
       const promiseOwner = findPromiseCallbackOwner(ancestors);
-      const owner = promiseOwner
-        ? findRemovableOwner(promiseOwner, ancestors)
-        : findRemovableOwner(node, ancestors);
-      replacements.push({ start: owner.start, end: owner.end, value: '' });
+      replacements.push(removeOwner(promiseOwner ?? node, ancestors));
     }
   );
 

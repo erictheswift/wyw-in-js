@@ -154,6 +154,29 @@ describe('oxc preeval transforms', () => {
       ).toContain('"undefined" !== "undefined"');
     });
 
+    it('keeps a removed sole statement body syntactically valid', () => {
+      expect(
+        removeDangerousCodeWithOxc(
+          [
+            'let idle = (cb) => setTimeout(cb, 500);',
+            'if (typeof requestIdleCallback != "undefined")',
+            '  idle = (cb) => requestIdleCallback(cb);',
+            'while (a) fetch(a);',
+            'if (b) {} else setTimeout(b);',
+            'const keep = 1;',
+          ].join('\n'),
+          filename
+        )
+      ).toMatchInlineSnapshot(`
+        "let idle = (cb) => setTimeout(cb, 500);
+        if (typeof requestIdleCallback != "undefined")
+          {}
+        while (a) {}
+        if (b) {} else {}
+        const keep = 1;"
+      `);
+    });
+
     it('removes browser-global statements', () => {
       const code = removeDangerousCodeWithOxc(
         'const first = fetch; const second = window.fetch; const keep = 1;',
