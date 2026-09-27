@@ -137,18 +137,18 @@ export const assertSourceMaps = async (pkgDir, useRspack) => {
                 'Source-only edit must update the map'
               );
             await SourceMapConsumer.with(map, null, (consumer) => {
-              for (const [property, suffix, line] of [
-                [`color:${color}`, '/entry.js', 3 + padding.length],
-                ['border:1px solid blue', '/second.js', 2],
+              for (const [property, content, line] of [
+                [`color:${color}`, entrySource, 3 + padding.length],
+                ['border:1px solid blue', secondSource, 2],
               ]) {
                 const prefix = css.slice(0, css.indexOf(property));
                 const original = consumer.originalPositionFor({
                   line: prefix.split('\n').length,
                   column: prefix.length - prefix.lastIndexOf('\n') - 1,
                 });
-                assert(
-                  original.source.replaceAll('\\', '/').endsWith(suffix),
-                  `Expected ${suffix}, mapped to ${original.source}`
+                assert.equal(
+                  consumer.sourceContentFor(original.source),
+                  content
                 );
                 assert.equal(original.line, line);
               }
