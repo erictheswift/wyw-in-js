@@ -19,6 +19,7 @@ import type {
 import type { BaseAction } from '../BaseAction';
 import { asyncActionRunner, syncActionRunner } from '../actionRunner';
 import { AbortError } from '../AbortError';
+import { markCacheRecoveryFenceError } from '../isCacheRecoveryControlError';
 import { EventEmitter } from '../../../utils/EventEmitter';
 
 describe('actionRunner', () => {
@@ -214,6 +215,156 @@ describe('actionRunner', () => {
     expect(parentCaught).not.toHaveBeenCalled();
     expect(parentClosed).toHaveBeenCalledTimes(1);
   });
+
+  it.each([false, true])(
+    'delivers a foreign child finish supersede to the parent catch: async %s',
+    async (asyncMode) => {
+      const parent = createEntrypoint(services, '/foo/foreign-parent.js', [
+        'default',
+      ]);
+      const child = createEntrypoint(services, '/foo/foreign-child.js', [
+        'first',
+      ]);
+      const observed = jest.fn();
+      let nextActionId = 0;
+      let childActionId: number | null = null;
+      let reentered = false;
+      services.eventEmitter = new EventEmitter(
+        () => {},
+        (...args) => {
+          if (args[0] === 'start') {
+            const id = nextActionId;
+            nextActionId += 1;
+            if (args[2] === 'resolveImports') childActionId = id;
+            return id;
+          }
+          if (args[0] === 'finish' && args[2] === childActionId && !reentered) {
+            reentered = true;
+            createEntrypoint(services, child.name, ['second']);
+          }
+          return undefined;
+        },
+        () => {}
+      );
+      const handlers = getHandlers<'sync'>({
+        *workflow(
+          this: IWorkflowAction
+        ): SyncScenarioForAction<IWorkflowAction> {
+          try {
+            yield ['resolveImports', child, undefined, null];
+          } catch (error) {
+            observed(error);
+            const successor = child.supersededWith;
+            if (!successor) {
+              throw error;
+            }
+            yield ['resolveImports', successor, undefined, null];
+          }
+          return { code: 'current', sourceMap: null };
+        },
+        *resolveImports() {
+          return [];
+        },
+      });
+      const action = parent.createAction('workflow', undefined, null);
+      const result = asyncMode
+        ? await asyncActionRunner(action, handlers)
+        : syncActionRunner(action, handlers);
+      expect(result).toEqual({ code: 'current', sourceMap: null });
+      expect(observed).toHaveBeenCalledWith(expect.any(AbortError));
+      expect(parent.supersededWith).toBeNull();
+    }
+  );
+
+  it.each([false, true])(
+    'keeps a non-abort fence error away from the parent catch: async %s',
+    async (asyncMode) => {
+      const parent = createEntrypoint(services, '/foo/fence-parent.js', [
+        'default',
+      ]);
+      const child = createEntrypoint(services, '/foo/fence-child.js', [
+        'first',
+      ]);
+      const parentCaught = jest.fn();
+      const fence = markCacheRecoveryFenceError(new Error('retired'));
+      const handlers = getHandlers<'sync'>({
+        *workflow(
+          this: IWorkflowAction
+        ): SyncScenarioForAction<IWorkflowAction> {
+          try {
+            yield ['resolveImports', child, undefined, null];
+          } catch (error) {
+            parentCaught(error);
+          }
+          return { code: 'stale fallback', sourceMap: null };
+        },
+        *resolveImports() {
+          throw fence;
+        },
+      });
+      const action = parent.createAction('workflow', undefined, null);
+      const run = () =>
+        asyncMode
+          ? asyncActionRunner(action, handlers)
+          : Promise.resolve().then(() => syncActionRunner(action, handlers));
+      await expect(run()).rejects.toBe(fence);
+      expect(parentCaught).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([false, true])(
+    'keeps a foreign child supersede fenced once the parent is superseded too: async %s',
+    async (asyncMode) => {
+      const parentName = '/foo/both-parent.js';
+      const parent = createEntrypoint(services, parentName, ['default']);
+      const child = createEntrypoint(services, '/foo/both-child.js', ['first']);
+      const parentCaught = jest.fn();
+      let nextActionId = 0;
+      let childActionId: number | null = null;
+      let reentered = false;
+      services.eventEmitter = new EventEmitter(
+        () => {},
+        (...args) => {
+          if (args[0] === 'start') {
+            const id = nextActionId;
+            nextActionId += 1;
+            if (args[2] === 'resolveImports') childActionId = id;
+            return id;
+          }
+          if (args[0] === 'finish' && args[2] === childActionId && !reentered) {
+            reentered = true;
+            createEntrypoint(services, child.name, ['second']);
+            createEntrypoint(services, parentName, ['replacement']);
+          }
+          return undefined;
+        },
+        () => {}
+      );
+      const handlers = getHandlers<'sync'>({
+        *workflow(
+          this: IWorkflowAction
+        ): SyncScenarioForAction<IWorkflowAction> {
+          try {
+            yield ['resolveImports', child, undefined, null];
+          } catch (error) {
+            parentCaught(error);
+          }
+          return { code: 'stale fallback', sourceMap: null };
+        },
+        *resolveImports() {
+          return [];
+        },
+      });
+      const action = parent.createAction('workflow', undefined, null);
+      const run = () =>
+        asyncMode
+          ? asyncActionRunner(action, handlers)
+          : Promise.resolve().then(() => syncActionRunner(action, handlers));
+      await expect(run()).rejects.toBeInstanceOf(AbortError);
+      expect(parentCaught).not.toHaveBeenCalled();
+      expect(parent.supersededWith).not.toBeNull();
+    }
+  );
 
   it('does not enter a sync action after its start event retires the epoch', () => {
     const sideEffect = jest.fn();

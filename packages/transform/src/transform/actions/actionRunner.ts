@@ -9,7 +9,7 @@ import type {
 } from '../types';
 import { Pending } from '../types';
 
-import { AbortError } from './AbortError';
+import { AbortError, isAborted } from './AbortError';
 import type { BaseAction } from './BaseAction';
 import {
   isCacheRecoveryControlError,
@@ -306,10 +306,26 @@ export async function asyncActionRunner<TAction extends ActionQueueItem>(
         }
       } catch (e) {
         (nextAction ?? action).log('error', e);
-        if (isCacheRecoveryFenceError(e) || isCacheRecoveryControlError(e)) {
+        if (isCacheRecoveryControlError(e)) {
           throw e;
         }
-        actionResult = [ACTION_ERROR, e];
+        // A fence protects the superseded entrypoint's own scenarios from
+        // resuming with stale state. Once it crosses into a parent that is a
+        // different, still-current entrypoint it is an ordinary child failure,
+        // so processImports can continue on the successor generation.
+        if (isCacheRecoveryFenceError(e)) {
+          if (
+            nextAction === undefined ||
+            nextAction.entrypoint === action.entrypoint ||
+            action.entrypoint.supersededWith !== null ||
+            !isAborted(e)
+          ) {
+            throw e;
+          }
+          actionResult = [ACTION_ERROR, new AbortError('superseded')];
+        } else {
+          actionResult = [ACTION_ERROR, e];
+        }
       }
     }
   } finally {
@@ -380,10 +396,26 @@ export function syncActionRunner<TAction extends ActionQueueItem>(
         }
       } catch (e) {
         (nextAction ?? action).log('error', e);
-        if (isCacheRecoveryFenceError(e) || isCacheRecoveryControlError(e)) {
+        if (isCacheRecoveryControlError(e)) {
           throw e;
         }
-        actionResult = [ACTION_ERROR, e];
+        // A fence protects the superseded entrypoint's own scenarios from
+        // resuming with stale state. Once it crosses into a parent that is a
+        // different, still-current entrypoint it is an ordinary child failure,
+        // so processImports can continue on the successor generation.
+        if (isCacheRecoveryFenceError(e)) {
+          if (
+            nextAction === undefined ||
+            nextAction.entrypoint === action.entrypoint ||
+            action.entrypoint.supersededWith !== null ||
+            !isAborted(e)
+          ) {
+            throw e;
+          }
+          actionResult = [ACTION_ERROR, new AbortError('superseded')];
+        } else {
+          actionResult = [ACTION_ERROR, e];
+        }
       }
     }
   } finally {
