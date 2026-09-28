@@ -6,6 +6,7 @@ import {
   replaceImportMetaEnvWithOxc,
   rewriteDynamicImportsWithOxc,
 } from '../utils/oxcPreevalTransforms';
+import { shakeOxcToESM } from '../utils/oxcShaker';
 
 const filename = '/test.ts';
 
@@ -174,6 +175,42 @@ describe('oxc preeval transforms', () => {
         while (a) {}
         if (b) {} else {}
         const keep = 1;"
+      `);
+    });
+
+    it('leaves emptied control statements to the shaker', () => {
+      const preeval = removeDangerousCodeWithOxc(
+        [
+          'let idle = (cb) => setTimeout(cb, 500);',
+          'let a = 1;',
+          'let i = 0;',
+          'if (typeof requestIdleCallback != "undefined")',
+          '  idle = (cb) => requestIdleCallback(cb);',
+          'while (a) fetch(a);',
+          'do fetch(a); while (a);',
+          'label: fetch(a);',
+          'while (a--) fetch(a);',
+          'for (; i < 3; i++) fetch(i);',
+          'export const out = [a, i];',
+          'export const get = () => idle;',
+        ].join('\n'),
+        filename
+      );
+
+      expect(
+        shakeOxcToESM(preeval, filename, { onlyExports: ['out', 'get'] }).code
+      ).toMatchInlineSnapshot(`
+        "let idle = (cb) => setTimeout(cb, 500);
+        let a = 1;
+        let i = 0;
+
+
+
+
+        while (a--) {}
+        for (; i < 3; i++) {}
+        export const out = [a, i];
+        export const get = () => idle;"
       `);
     });
 
