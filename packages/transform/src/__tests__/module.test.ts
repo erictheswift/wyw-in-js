@@ -163,14 +163,16 @@ it('creates module for JS files', async () => {
 
 it('keeps a strong entrypoint reference when WeakRef eval mode is disabled', async () => {
   const realWeakRef = globalThis.WeakRef;
-  let weakRefConstructed = false;
+  // The runtime itself may hold WeakRefs (bun's vm.createContext does);
+  // only a WeakRef to the entrypoint is the module's doing.
+  const weakRefTargets: object[] = [];
 
   class EmptyWeakRef<T extends object> {
     private target: T;
 
     constructor(target: T) {
       this.target = target;
-      weakRefConstructed = true;
+      weakRefTargets.push(target);
     }
 
     deref(): T | undefined {
@@ -195,7 +197,7 @@ it('keeps a strong entrypoint reference when WeakRef eval mode is disabled', asy
     await safeEvaluate(mod);
 
     expect((mod.exports as any)()).toBe(42);
-    expect(weakRefConstructed).toBe(false);
+    expect(weakRefTargets).not.toContain(entrypoint);
   } finally {
     (globalThis as typeof globalThis & { WeakRef: typeof WeakRef }).WeakRef =
       realWeakRef;
