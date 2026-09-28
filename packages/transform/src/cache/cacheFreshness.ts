@@ -18,6 +18,23 @@ interface DependencyToCheck {
   readOnly?: boolean;
 }
 
+interface FileStat {
+  mtimeMs: number;
+  fingerprint: string | null;
+}
+
+// A write cannot preserve ctime, so a complete fingerprint proves the bytes
+// unchanged. Partial stats (mocks, exotic filesystems) fall back to reading.
+const toFileStat = (stats: fs.Stats): FileStat => ({
+  mtimeMs: stats.mtimeMs,
+  fingerprint:
+    Number.isFinite(stats.ctimeMs) &&
+    Number.isFinite(stats.size) &&
+    Number.isFinite(stats.ino)
+      ? `${stats.mtimeMs}\0${stats.ctimeMs}\0${stats.size}\0${stats.ino}`
+      : null,
+});
+
 export interface PendingUnknownGraph {
   dependencies: Set<string>;
   recoveryToken: object;
@@ -36,7 +53,7 @@ export abstract class CacheFreshness<
     { hash: string; source: 'fs' | 'loaded' }
   >();
 
-  private fileMtimes = new Map<string, number>();
+  private fileStats = new Map<string, FileStat>();
 
   protected readonly publishedEntrypoints = new Set<string>();
 
@@ -231,7 +248,7 @@ export abstract class CacheFreshness<
   protected resetFreshness(): void {
     this.contentHashes.clear();
     this.pendingContentHashSynchronizations.clear();
-    this.fileMtimes.clear();
+    this.fileStats.clear();
     this.invalidatedFiles.clear();
     this.changedFileVersions.clear();
     this.consumedInvalidationVersions.clear();
@@ -625,7 +642,7 @@ export abstract class CacheFreshness<
     if (visitedFiles.has(dependencyFilename)) return false;
 
     const strippedFilename = stripQueryAndHash(dependencyFilename);
-    const cachedMtime = this.fileMtimes.get(dependencyFilename);
+    const cachedMtime = this.fileStats.get(dependencyFilename)?.mtimeMs;
     const cachedEntrypoint = this.getEntrypoint(dependencyFilename);
     const hasSnapshot = this.entrypointDependencySnapshots.has(
       this.getKey(dependencyFilename)
@@ -826,6 +843,20 @@ export abstract class CacheFreshness<
     const previousHash = this.contentHashes.get(filename)?.fs;
     if (previousHash === undefined) return false;
 
+    const recordedFingerprint = this.fileStats.get(filename)?.fingerprint;
+    if (recordedFingerprint) {
+      try {
+        if (
+          toFileStat(fs.statSync(strippedFilename)).fingerprint ===
+          recordedFingerprint
+        ) {
+          return false;
+        }
+      } catch (error) {
+        if (!isMissingFileError(error)) throw error;
+      }
+    }
+
     let content: string;
     try {
       content = fs.readFileSync(strippedFilename, 'utf8');
@@ -883,14 +914,14 @@ export abstract class CacheFreshness<
 
   public checkFreshness(filename: string, strippedFilename: string): boolean {
     try {
-      const currentMtime = fs.statSync(strippedFilename).mtimeMs;
-      const cachedMtime = this.fileMtimes.get(filename);
-      if (cachedMtime !== undefined && currentMtime === cachedMtime) {
+      const currentStat = toFileStat(fs.statSync(strippedFilename));
+      const cachedMtime = this.fileStats.get(filename)?.mtimeMs;
+      if (cachedMtime !== undefined && currentStat.mtimeMs === cachedMtime) {
         return false;
       }
 
       const content = fs.readFileSync(strippedFilename, 'utf8');
-      this.fileMtimes.set(filename, currentMtime);
+      this.fileStats.set(filename, currentStat);
       return this.invalidateIfChanged(filename, content, undefined, 'fs');
     } catch (error) {
       if (!isMissingFileError(error)) throw error;
@@ -946,7 +977,7 @@ export abstract class CacheFreshness<
         this.contentHashes.get(filename)!.fs = hashContent(diskCode);
         // This is a baseline, not a freshness probe. The first probe must
         // still read bytes even if the timestamp did not move.
-        this.fileMtimes.delete(filename);
+        this.fileStats.delete(filename);
       } catch {
         // Virtual/missing sources have no raw baseline. A later unmatched fs
         // revision stays conservative; never infer equivalence from mtime.
@@ -955,9 +986,9 @@ export abstract class CacheFreshness<
 
     if (source === 'fs') {
       try {
-        this.fileMtimes.set(
+        this.fileStats.set(
           filename,
-          fs.statSync(stripQueryAndHash(filename)).mtimeMs
+          toFileStat(fs.statSync(stripQueryAndHash(filename)))
         );
       } catch {
         // ignore
