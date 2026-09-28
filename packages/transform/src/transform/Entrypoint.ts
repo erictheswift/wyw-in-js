@@ -408,7 +408,7 @@ export class Entrypoint extends BaseEntrypoint {
       return detached;
     }
 
-    if (expectedCached !== this) {
+    if (!this.isPublishedAs(expectedCached)) {
       throw new AbortError('superseded');
     }
 
