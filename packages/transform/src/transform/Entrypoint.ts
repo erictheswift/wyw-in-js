@@ -30,6 +30,8 @@ import type { Services, ActionTypes, ActionQueueItem } from './types';
 
 const EMPTY_FILE = '=== empty file ===';
 const DEFAULT_ACTION_CONTEXT = Symbol('defaultActionContext');
+// An evaluated copy replaces its source in the cache without superseding it.
+const evaluatedSources = new WeakMap<object, Entrypoint>();
 
 export class Entrypoint extends BaseEntrypoint {
   public readonly evaluated = false;
@@ -573,8 +575,18 @@ export class Entrypoint extends BaseEntrypoint {
     services.cache.assertEpoch(evaluated.cacheEpoch);
     this.assertCurrentCacheEpoch();
     this.assertNotSuperseded();
+    evaluatedSources.set(evaluated, this);
 
     return evaluated;
+  }
+
+  public isPublishedAs(
+    publication: Entrypoint | IEvaluatedEntrypoint | undefined
+  ): boolean {
+    return (
+      publication === this ||
+      (publication !== undefined && evaluatedSources.get(publication) === this)
+    );
   }
 
   public endProcessing() {

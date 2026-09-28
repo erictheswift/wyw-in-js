@@ -599,7 +599,10 @@ export class EvalBroker {
     }
 
     try {
-      if (rootPublication !== undefined && rootPublication !== entrypoint) {
+      if (
+        rootPublication !== undefined &&
+        !entrypoint.isPublishedAs(rootPublication)
+      ) {
         throw new AbortError('superseded');
       }
       // Mark this cache as active before waiting for a runner. A reset from

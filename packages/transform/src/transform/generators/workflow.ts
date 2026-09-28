@@ -37,7 +37,31 @@ export function* workflow(
     this.cacheEpoch.owner.assertEpoch(this.cacheEpoch);
     entrypoint.assertCurrentCacheEpoch();
     entrypoint.assertNotSuperseded();
+    const current = cache.get('entrypoints', entrypoint.name);
+    if (
+      current !== expected &&
+      !(expected === entrypoint && entrypoint.isPublishedAs(current))
+    ) {
+      throw new AbortError('superseded');
+    }
+  };
+
+  // A root without artifacts must not pin its publication, unless another
+  // consumer already replaced it with an evaluated copy it relies on.
+  const releasePublication = (expected: typeof expectedBeforeProcess) => {
     if (cache.get('entrypoints', entrypoint.name) !== expected) {
+      assertPublication(expected);
+      return;
+    }
+    if (
+      !cache.invalidatePublished(
+        this.cacheEpoch,
+        'entrypoints',
+        entrypoint.name,
+        expected
+      )
+    ) {
+      entrypoint.assertNotSuperseded();
       throw new AbortError('superseded');
     }
   };
@@ -100,17 +124,7 @@ export function* workflow(
       // A root bundler pass for a plain dependency must not pin eval/cache state.
       // If another WyW file needs this module, it will be prepared on demand.
       recordPipelineDisposableRoot(entrypoint.name, 'preeval');
-      if (
-        !cache.invalidatePublished(
-          this.cacheEpoch,
-          'entrypoints',
-          entrypoint.name,
-          expectedBeforeMetadata
-        )
-      ) {
-        entrypoint.assertNotSuperseded();
-        throw new AbortError('superseded');
-      }
+      releasePublication(expectedBeforeMetadata);
     }
 
     return {
@@ -180,17 +194,7 @@ export function* workflow(
       assertPublication(expectedAfterCollect);
       if (isLoadedEntrypointWithoutArtifacts(entrypoint)) {
         recordPipelineDisposableRoot(entrypoint.name, 'collect');
-        if (
-          !cache.invalidatePublished(
-            this.cacheEpoch,
-            'entrypoints',
-            entrypoint.name,
-            expectedAfterCollect
-          )
-        ) {
-          entrypoint.assertNotSuperseded();
-          throw new AbortError('superseded');
-        }
+        releasePublication(expectedAfterCollect);
       }
 
       return {

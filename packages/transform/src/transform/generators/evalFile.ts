@@ -27,7 +27,7 @@ export async function* evalFile(
       'entrypoints',
       entrypoint.name
     );
-    if (expectedPublication !== entrypoint) {
+    if (!entrypoint.isPublishedAs(expectedPublication)) {
       throw new AbortError('superseded');
     }
     const prevalPayload = createPrevalPayload({
