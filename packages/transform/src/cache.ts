@@ -71,8 +71,18 @@ export class TransformCacheCollection<
     this.barrelManifests.clear();
     recordPipelineCacheClear('entrypoints', reason, this.entrypoints.size);
     this.entrypoints.clear();
+    this.publicationVersion += 1;
     recordPipelineCacheClear('exports', reason, this.exports.size);
     this.exports.clear();
+  }
+
+  // Bumped on every write to the entrypoints map. Per-step fences compare it
+  // before paying for a keyed lookup of their expected publication.
+  private publicationVersion = 0;
+
+  /** @internal */
+  public getPublicationVersion(): number {
+    return this.publicationVersion;
   }
 
   protected getEntrypoint(filename: string): TEntrypoint | undefined {
@@ -91,6 +101,7 @@ export class TransformCacheCollection<
   }
 
   protected migrateCacheKeys(remap: (key: string) => string): void {
+    this.publicationVersion += 1;
     const migrate = <TValue>(cache: Map<string, TValue>) => {
       const entries = Array.from(cache.entries());
       cache.clear();
@@ -117,6 +128,10 @@ export class TransformCacheCollection<
       if (!cache.has(cacheKey)) return 'added';
       return cache.get(cacheKey) === value ? 'unchanged' : 'updated';
     });
+
+    if (cacheName === 'entrypoints') {
+      this.publicationVersion += 1;
+    }
 
     if (value === undefined) {
       cache.delete(cacheKey);
@@ -202,6 +217,9 @@ export class TransformCacheCollection<
     }
 
     loggers[cacheName]('clear');
+    if (cacheName === 'entrypoints') {
+      this.publicationVersion += 1;
+    }
     const cache = this[cacheName] as Map<string, unknown>;
     recordPipelineCacheClear(cacheName, 'explicit', cache.size);
     cache.clear();
@@ -252,6 +270,7 @@ export class TransformCacheCollection<
 
     loggers[cacheName]('invalidate', key);
     if (cacheName === 'entrypoints') {
+      this.publicationVersion += 1;
       this.snapshotEntrypointDependencies(
         key,
         cache.get(cacheKey) as TEntrypoint

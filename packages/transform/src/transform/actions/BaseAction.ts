@@ -6,6 +6,7 @@ import type { TransformCacheEpoch } from '../../cache';
 import type { Entrypoint } from '../Entrypoint';
 import type { IEvaluatedEntrypoint } from '../EvaluatedEntrypoint';
 import { AbortError } from './AbortError';
+import { PublicationFence } from './PublicationFence';
 import {
   isCacheRecoveryFenceError,
   markCacheRecoveryFenceError,
@@ -207,7 +208,7 @@ export class BaseAction<TAction extends ActionQueueItem>
 
     const assertSupersedeState = (
       expected: Entrypoint | null,
-      expectedPublication: unknown,
+      expectedPublication: PublicationFence,
       onFenceError: (error: unknown) => void
     ) => {
       try {
@@ -215,12 +216,7 @@ export class BaseAction<TAction extends ActionQueueItem>
         if (this.entrypoint.supersededWith !== expected) {
           throw new AbortError('superseded');
         }
-        if (
-          this.services.cache.get('entrypoints', this.entrypoint.name) !==
-          expectedPublication
-        ) {
-          throw new AbortError('superseded');
-        }
+        expectedPublication.assertCurrent();
       } catch (error) {
         const fenceError = markCacheRecoveryFenceError(error);
         onFenceError(fenceError);
@@ -237,8 +233,8 @@ export class BaseAction<TAction extends ActionQueueItem>
       // public start/finish callbacks for this throw step. Fence the relative
       // identity rather than requiring the parent to still be unsuperseded.
       const expectedSupersededWith = this.entrypoint.supersededWith;
-      let expectedPublication = this.services.cache.get(
-        'entrypoints',
+      const expectedPublication = new PublicationFence(
+        this.services.cache,
         this.entrypoint.name
       );
       const assertThrowCurrent = () =>
@@ -253,10 +249,7 @@ export class BaseAction<TAction extends ActionQueueItem>
           if (this.entrypoint.supersededWith !== expectedSupersededWith) {
             throw new AbortError('superseded');
           }
-          expectedPublication = this.services.cache.get(
-            'entrypoints',
-            this.entrypoint.name
-          );
+          expectedPublication.capture();
         } catch (error) {
           // This fence runs after the handler body but before the public
           // finish callback. A handler-driven supersede is normal control
@@ -303,8 +296,8 @@ export class BaseAction<TAction extends ActionQueueItem>
       onFenceError: (error: unknown) => void
     ) => {
       const expectedSupersededWith = this.entrypoint.supersededWith;
-      let expectedPublication = this.services.cache.get(
-        'entrypoints',
+      const expectedPublication = new PublicationFence(
+        this.services.cache,
         this.entrypoint.name
       );
       const assertNextCurrent = () => {
@@ -313,12 +306,7 @@ export class BaseAction<TAction extends ActionQueueItem>
           if (this.entrypoint.supersededWith !== expectedSupersededWith) {
             throw new AbortError('superseded');
           }
-          if (
-            this.services.cache.get('entrypoints', this.entrypoint.name) !==
-            expectedPublication
-          ) {
-            throw new AbortError('superseded');
-          }
+          expectedPublication.assertCurrent();
         } catch (error) {
           const fenceError = markCacheRecoveryFenceError(error);
           onFenceError(fenceError);
@@ -331,10 +319,7 @@ export class BaseAction<TAction extends ActionQueueItem>
           if (this.entrypoint.supersededWith !== expectedSupersededWith) {
             throw new AbortError('superseded');
           }
-          expectedPublication = this.services.cache.get(
-            'entrypoints',
-            this.entrypoint.name
-          );
+          expectedPublication.capture();
         } catch (error) {
           // See prepareThrowFinish: handler-driven supersedes are recoverable
           // by the parent scenario, unlike mutations from lifecycle observers.
