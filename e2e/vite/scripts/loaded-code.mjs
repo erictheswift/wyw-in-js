@@ -8,6 +8,7 @@ import wyw from '@wyw-in-js/vite';
 
 export async function assertLoadedCode(pkgDir) {
   const fixture = await fs.mkdtemp(path.join(pkgDir, 'loaded-code-'));
+  const fixturePrefix = `${fixture.replace(/\\/g, '/')}/`;
   const names = ['page', 'header', 'footer', 'button', 'icon', 'spacing'];
   try {
     await fs.cp(path.join(pkgDir, 'fixtures', 'loaded-code'), fixture, {
@@ -24,8 +25,12 @@ export async function assertLoadedCode(pkgDir) {
       name: 'assert-loaded-javascript',
       enforce: 'post',
       transform(code, id) {
-        if (id.startsWith(fixture) && /\.ts$/.test(id)) {
-          seen.add(path.basename(id));
+        const normalizedId = id.replace(/\\/g, '/');
+        if (
+          normalizedId.startsWith(fixturePrefix) &&
+          /\.ts$/.test(normalizedId)
+        ) {
+          seen.add(path.posix.basename(normalizedId));
           assert(
             !/:\s*number/.test(code),
             `WyW returned disk TypeScript for ${id}`
