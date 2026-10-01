@@ -174,6 +174,7 @@ export const clearCacheProviderRegistry = (cacheHost: object): void => {
 };
 
 export type OutputCssPayload = {
+  cssSourceMapText?: string;
   cssText: string;
 };
 
@@ -213,8 +214,14 @@ export const decodeOutputCssPayload = (
     throw new Error('Invalid output CSS payload');
   }
 
+  const cssSourceMapText =
+    'cssSourceMapText' in payload ? payload.cssSourceMapText : undefined;
+  if (cssSourceMapText !== undefined && typeof cssSourceMapText !== 'string') {
+    throw new Error('Invalid output CSS payload');
+  }
   return {
     cssText: payload.cssText,
+    ...(cssSourceMapText === undefined ? {} : { cssSourceMapText }),
   };
 };
 
