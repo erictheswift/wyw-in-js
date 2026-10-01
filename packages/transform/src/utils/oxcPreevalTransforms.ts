@@ -13,6 +13,12 @@ import type { CodeRemoverOptions } from '@wyw-in-js/shared';
 import { collectOxcExportsAndImports } from './collectOxcExportsAndImports';
 import { EventEmitter } from './EventEmitter';
 import { getOxcNodeChildren } from './oxc/ast';
+import {
+  isControlStatement,
+  removeEmptyControlStatements,
+  removeOwner,
+  type ControlStatement,
+} from './oxcDangerousCodeOwners';
 import { parseOxcProgramCached } from './parseOxc';
 
 type AnyNode = Node & Record<string, unknown>;
@@ -94,19 +100,6 @@ const defaultReactHocs = ['forwardRef', 'memo'];
 const generatedProcessorHelperNameRe = /^_exp\d*$/;
 const requireCallRe = /\brequire\s*\(/;
 const windowTokenRe = /\bwindow\b/;
-const removableOwnerTypes = new Set([
-  'DoWhileStatement',
-  'ExpressionStatement',
-  'ForInStatement',
-  'ForOfStatement',
-  'ForStatement',
-  'FunctionDeclaration',
-  'IfStatement',
-  'PropertyDefinition',
-  'ReturnStatement',
-  'VariableDeclaration',
-  'WhileStatement',
-]);
 const importMetaEnvRe = /\bimport\s*\.\s*meta\s*\.\s*env\b/;
 
 const createScope = (parent: Scope | null, key: string): Scope => ({
@@ -932,59 +925,6 @@ function findLastAncestor(
   return null;
 }
 
-const isSoleStatementBody = (owner: Node, parent: Node | null): boolean => {
-  switch (parent?.type) {
-    case 'IfStatement':
-      return parent.consequent === owner || parent.alternate === owner;
-    case 'ForStatement':
-    case 'ForInStatement':
-    case 'ForOfStatement':
-    case 'WhileStatement':
-    case 'DoWhileStatement':
-    case 'LabeledStatement':
-      return parent.body === owner;
-    default:
-      return false;
-  }
-};
-
-const removeOwner = (node: Node, ancestors: Node[]): Replacement => {
-  let owner: Node = node;
-  // `node` is the visited node (not yet on the stack) or a promise-callback
-  // owner taken from the stack; either way its parent precedes it.
-  let ownerAncestorIndex = ancestors.lastIndexOf(node);
-  if (ownerAncestorIndex === -1) {
-    ownerAncestorIndex = ancestors.length;
-  }
-
-  if (!removableOwnerTypes.has(node.type)) {
-    for (let idx = ancestors.length - 1; idx >= 0; idx -= 1) {
-      const ancestor = ancestors[idx];
-      if (removableOwnerTypes.has(ancestor.type)) {
-        owner = ancestor;
-        ownerAncestorIndex = idx;
-        break;
-      }
-    }
-  }
-
-  const parent =
-    ownerAncestorIndex > 0 ? ancestors[ownerAncestorIndex - 1] : null;
-  if (
-    parent?.type === 'ExportNamedDeclaration' &&
-    'declaration' in parent &&
-    parent.declaration === owner
-  ) {
-    return { start: parent.start, end: parent.end, value: '' };
-  }
-
-  return {
-    start: owner.start,
-    end: owner.end,
-    value: isSoleStatementBody(owner, parent) ? '{}' : '',
-  };
-};
-
 type ExportedBindingProtection = {
   start: number;
   end: number;
@@ -1627,6 +1567,7 @@ export const collectDangerousCodeReplacementsWithOxc = (
   }
 ): DangerousCodeReplacement[] => {
   const replacements: DangerousCodeReplacement[] = [];
+  const controlStatements: ControlStatement[] = [];
   const ignoredSpans = [...(planningOptions?.ignoredSpans ?? [])]
     .sort((a, b) => a.start - b.start)
     .reduce<Array<{ end: number; start: number }>>((result, span) => {
@@ -1707,6 +1648,10 @@ export const collectDangerousCodeReplacementsWithOxc = (
     (node, scope, parent, ancestors) => {
       if (isIgnoredNode(node)) {
         return;
+      }
+
+      if (isControlStatement(node)) {
+        controlStatements.push({ node, parent });
       }
 
       if (node.type === 'JSXElement' || node.type === 'JSXFragment') {
@@ -1899,5 +1844,10 @@ export const collectDangerousCodeReplacementsWithOxc = (
     }
   );
 
-  return normalizeReplacements(replacements);
+  return normalizeReplacements(
+    removeEmptyControlStatements(
+      normalizeReplacements(replacements),
+      controlStatements
+    )
+  );
 };
