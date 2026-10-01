@@ -4,7 +4,13 @@ import type { Rules } from '@wyw-in-js/shared';
 
 // eslint-disable-next-line import/no-relative-packages -- not part of the transform public API
 import { extractCssFromAst } from '../../../transform/src/transform/generators/extract';
-import { getCacheInstance, toCacheKey } from '../cache';
+import {
+  decodeOutputCssPayload,
+  encodeOutputCssPayload,
+  getCacheInstance,
+  toCacheKey,
+} from '../cache';
+import outputCssLoader from '../outputCssLoader';
 
 const transformMock = jest.fn();
 
@@ -130,13 +136,21 @@ describe('webpack-loader CSS source map', () => {
       }),
     }));
 
+    let emittedCode = '';
     await new Promise<void>((resolve, reject) => {
       webpackLoader.call(
         {
           _compiler: compiler,
           addDependency: jest.fn(),
           async: jest.fn(),
-          callback: (err: Error | null) => (err ? reject(err) : resolve()),
+          callback: (err: Error | null, code: string) => {
+            emittedCode = code;
+            if (err) {
+              reject(err);
+            } else {
+              resolve();
+            }
+          },
           context: process.cwd(),
           emitWarning: jest.fn(),
           getDependencies: () => [],
@@ -167,5 +181,63 @@ describe('webpack-loader CSS source map', () => {
     const css = String(await cache.get(toCacheKey(resourcePath)));
 
     expect(await generatedLines(css)).toEqual(actualLines(css));
+
+    const request = JSON.parse(emittedCode.match(/require\(([^)]+)\);/)![1]);
+    const params = new URLSearchParams(
+      request.split('!=!')[1].split('!')[0].split('?')[1]
+    );
+    const outputCssPayload = params.get('outputCssPayload')!;
+    const payload = decodeOutputCssPayload(outputCssPayload);
+    expect(payload.cssText).not.toContain('sourceMappingURL');
+    const callback = jest.fn();
+    await outputCssLoader.call({
+      _module: { type: 'javascript/auto' },
+      async: jest.fn(),
+      getOptions: () => ({ outputCssPayload }),
+      callback,
+    } as ThisParameterType<typeof outputCssLoader>);
+    const [error, emittedCss, map] = callback.mock.calls[0];
+    expect(error).toBeNull();
+    expect(emittedCss).toBe(payload.cssText);
+    await SourceMapConsumer.with(map, null, (consumer) => {
+      for (const [selector, rule] of Object.entries(rules)) {
+        expect(
+          consumer.originalPositionFor({
+            line: lineNumber(emittedCss, '', selector),
+            column: 0,
+          })
+        ).toEqual({
+          source: resourcePath,
+          line: rule.start!.line,
+          column: rule.start!.column,
+          name: selector,
+        });
+      }
+    });
   });
+
+  it.each(['asset', 'asset/resource', 'asset/inline', 'asset/source'])(
+    'retains an inline map for raw %s output',
+    async (type) => {
+      const extracted = extractCssFromAst(rules, '', {
+        filename: '/abs/entry.tsx',
+        keepComments: true,
+      });
+      const callback = jest.fn();
+      await outputCssLoader.call({
+        _module: { type },
+        async: jest.fn(),
+        getOptions: () => ({
+          outputCssPayload: encodeOutputCssPayload(extracted),
+        }),
+        callback,
+      } as ThisParameterType<typeof outputCssLoader>);
+
+      const [error, emittedCss, map] = callback.mock.calls[0];
+      expect(error).toBeNull();
+      expect(emittedCss).toContain(marker);
+      expect(await generatedLines(emittedCss)).toEqual(actualLines(emittedCss));
+      expect(map).toEqual(JSON.parse(extracted.cssSourceMapText));
+    }
+  );
 });

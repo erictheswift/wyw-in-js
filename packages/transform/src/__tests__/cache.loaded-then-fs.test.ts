@@ -113,6 +113,7 @@ describe('TransformCacheCollection: loaded code differs from disk', () => {
 
   it('detects changed disk bytes before first fs probe at unchanged mtime', () => {
     iconContentOnDisk = 'export const Icon = () => "changed";';
+
     expect(cache.checkFreshness(iconName, iconName)).toBe(true);
     expect(cache.get('entrypoints', iconName)).toBeUndefined();
   });
@@ -120,6 +121,19 @@ describe('TransformCacheCollection: loaded code differs from disk', () => {
   it('does not refresh the raw baseline when loaded code is republished', () => {
     iconContentOnDisk = 'export const Icon = () => "changed";';
     publishIcon(2);
+
+    expect(cache.checkFreshness(iconName, iconName)).toBe(true);
+    expect(cache.get('entrypoints', iconName)).toBeUndefined();
+  });
+
+  it('invalidates a virtual source when its first disk revision differs', () => {
+    mockedReadFileSync.mockImplementation(() => {
+      throw new Error('Virtual source has no disk baseline');
+    });
+    cache = new TransformCacheCollection<MockEntrypoint>();
+    publishIcon(1);
+    mockedReadFileSync.mockImplementation(() => iconContentOnDisk);
+
     expect(cache.checkFreshness(iconName, iconName)).toBe(true);
     expect(cache.get('entrypoints', iconName)).toBeUndefined();
   });

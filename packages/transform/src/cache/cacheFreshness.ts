@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { logger } from '@wyw-in-js/shared';
 
 import type { TransformCacheEpoch } from './cacheLifecycle';
-import { isFileStatUnchanged, toFileStat, type FileStat } from './fileStat';
+import { isFileStatUnchanged, readFileStat, type FileStat } from './fileStat';
 import { LoadedSources } from './loadedSource';
 import {
   createDependencySnapshot,
@@ -657,7 +657,7 @@ export abstract class CacheFreshness<
     if (cachedStat !== undefined) {
       let currentStat: FileStat;
       try {
-        currentStat = toFileStat(fs.statSync(strippedFilename));
+        currentStat = readFileStat(strippedFilename);
       } catch (error) {
         if (!isMissingFileError(error)) throw error;
         return this.recordMissingDependency(
@@ -822,8 +822,7 @@ export abstract class CacheFreshness<
     if (recordedFingerprint) {
       try {
         if (
-          toFileStat(fs.statSync(strippedFilename)).fingerprint ===
-          recordedFingerprint
+          readFileStat(strippedFilename).fingerprint === recordedFingerprint
         ) {
           return false;
         }
@@ -889,7 +888,7 @@ export abstract class CacheFreshness<
 
   public checkFreshness(filename: string, strippedFilename: string): boolean {
     try {
-      const currentStat = toFileStat(fs.statSync(strippedFilename));
+      const currentStat = readFileStat(strippedFilename);
       if (isFileStatUnchanged(currentStat, this.fileStats.get(filename))) {
         return false;
       }
@@ -968,10 +967,7 @@ export abstract class CacheFreshness<
 
     if (source === 'fs') {
       try {
-        this.fileStats.set(
-          filename,
-          toFileStat(fs.statSync(stripQueryAndHash(filename)))
-        );
+        this.fileStats.set(filename, readFileStat(stripQueryAndHash(filename)));
       } catch {
         // ignore
       }

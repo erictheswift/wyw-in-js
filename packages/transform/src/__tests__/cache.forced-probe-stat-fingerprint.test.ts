@@ -118,4 +118,46 @@ describe('TransformCacheCollection: forced content probe', () => {
       expect(mockedReadFileSync).toHaveBeenCalledWith(depName, 'utf8');
     }
   );
+
+  it.each(['direct', 'dependency', 'forced dependency'])(
+    'detects sub-millisecond writes with unchanged millisecond stats during a %s probe',
+    (probe) => {
+      let preciseStat = {
+        ctimeMs: 500n,
+        ctimeNs: 500000001n,
+        ino: 7n,
+        mtimeMs: 123n,
+        mtimeNs: 123000000n,
+        size: 27n,
+      };
+      mockedStatSync.mockImplementation((path, options) => {
+        if (path !== depName) {
+          throw new Error(`Unexpected statSync call: ${String(path)}`);
+        }
+        return (
+          options && typeof options === 'object' && options.bigint
+            ? preciseStat
+            : depStat
+        ) as fs.Stats;
+      });
+      expect(cache.checkFreshness(depName, depName)).toBe(false);
+      mockedReadFileSync.mockClear();
+      if (probe !== 'forced dependency') {
+        cache
+          .get('entrypoints', parentName)!
+          .invalidateOnDependencyChange!.clear();
+      }
+      depContent = 'export const token = "tan";';
+      preciseStat = { ...preciseStat, ctimeNs: 500000002n };
+
+      const changed =
+        probe === 'direct'
+          ? cache.checkFreshness(depName, depName)
+          : cache.invalidateIfChanged(parentName, parentContent);
+
+      expect(changed).toBe(true);
+      expect(cache.get('entrypoints', depName)).toBeUndefined();
+      expect(mockedReadFileSync).toHaveBeenCalledWith(depName, 'utf8');
+    }
+  );
 });

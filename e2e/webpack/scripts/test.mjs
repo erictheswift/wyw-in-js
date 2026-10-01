@@ -9,6 +9,8 @@ import { promisify } from 'node:util';
 import colors from 'picocolors';
 import prettier from 'prettier';
 
+import { assertSourceMaps } from './sourcemaps.mjs';
+
 const require = createRequire(import.meta.url);
 const useRspack = process.argv.includes('--rspack');
 const bundler = useRspack ? require('@rspack/core').rspack : require('webpack');
@@ -388,9 +390,12 @@ const main = async () => {
   await assertPersistentCache();
   await assertRspackParallelLoader();
   await assertWatchUpdates();
+  await assertSourceMaps(PKG_DIR, useRspack);
 };
 
-const run = process.argv.includes('--persistent-cache-child')
+const run = process.argv.includes('--sourcemaps-only')
+  ? () => assertSourceMaps(PKG_DIR, useRspack)
+  : process.argv.includes('--persistent-cache-child')
   ? runPersistentCacheChild
   : process.argv.includes('--watch-only')
   ? assertWatchUpdates

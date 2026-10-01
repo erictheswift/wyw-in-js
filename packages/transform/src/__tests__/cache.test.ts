@@ -299,6 +299,7 @@ describe('TransformCacheCollection', () => {
       });
 
       cache.invalidateIfChanged(depName, depContent, undefined, 'fs');
+      // Publication may read a raw baseline; count only freshness probes.
       mockedReadFileSync.mockClear();
 
       const invalidated = cache.invalidateIfChanged(parentName, parentContent);
@@ -307,7 +308,7 @@ describe('TransformCacheCollection', () => {
       expect(cache.has('entrypoints', parentName)).toBe(true);
       expect(cache.has('entrypoints', depName)).toBe(true);
       expect(mockedReadFileSync).not.toHaveBeenCalledWith(depName, 'utf8');
-      expect(mockedStatSync).toHaveBeenCalledWith(depName);
+      expect(mockedStatSync).toHaveBeenCalledWith(depName, { bigint: true });
     });
 
     it('does not invalidate an output-affecting dependency when only its entrypoint was evicted', () => {

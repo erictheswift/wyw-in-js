@@ -1,21 +1,34 @@
-import type { Stats } from 'node:fs';
+import fs, { type BigIntStats, type Stats } from 'node:fs';
 
 export interface FileStat {
   mtimeMs: number;
   fingerprint: string | null;
 }
 
-// A write cannot preserve ctime, so a complete fingerprint proves the bytes
-// unchanged. Partial stats (mocks, exotic filesystems) fall back to reading.
-export const toFileStat = (stats: Stats): FileStat => ({
-  mtimeMs: stats.mtimeMs,
-  fingerprint:
-    Number.isFinite(stats.ctimeMs) &&
-    Number.isFinite(stats.size) &&
-    Number.isFinite(stats.ino)
-      ? `${stats.mtimeMs}\0${stats.ctimeMs}\0${stats.size}\0${stats.ino}`
-      : null,
-});
+// Nanosecond timestamps distinguish writes within one millisecond. Keep
+// compatibility with partial stats returned by mocks or exotic filesystems.
+export const toFileStat = (stats: Stats | BigIntStats): FileStat => {
+  const mtimeMs = Number(stats.mtimeMs);
+  if ('mtimeNs' in stats) {
+    return {
+      mtimeMs,
+      fingerprint: `${stats.mtimeNs}\0${stats.ctimeNs}\0${stats.size}\0${stats.ino}`,
+    };
+  }
+
+  return {
+    mtimeMs,
+    fingerprint:
+      Number.isFinite(stats.ctimeMs) &&
+      Number.isFinite(stats.size) &&
+      Number.isFinite(stats.ino)
+        ? `${stats.mtimeMs}\0${stats.ctimeMs}\0${stats.size}\0${stats.ino}`
+        : null,
+  };
+};
+
+export const readFileStat = (filename: string): FileStat =>
+  toFileStat(fs.statSync(filename, { bigint: true }));
 
 export const isFileStatUnchanged = (
   current: FileStat,
