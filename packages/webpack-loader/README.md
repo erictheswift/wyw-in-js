@@ -72,7 +72,7 @@ Here `webpack` is `require('webpack')`; keep `MiniCssExtractPlugin` in the plugi
 
 For Rspack, use its `CssExtractRspackPlugin` and `SourceMapDevToolPlugin`. When combining a CSS-only map plugin with an eval-based devtool, explicitly set `sourceMap: true` on `css-loader` and, if present, `postcss-loader`: Rspack does not infer those loader settings from the CSS-only plugin.
 
-The output loader passes the map through the loader callback, separately from CSS. The final `.css.map` includes original source text; CSS does not need per-file inline map comments. Consumers that emit CSS as a raw `asset/resource` do not compose these loader maps; use a CSS extraction pipeline for source navigation.
+The output loader passes the map through the loader callback, separately from CSS. The final `.css.map` includes original source text; CSS does not need per-file inline map comments. Raw asset modules, such as `asset/resource`, retain an inline CSS map when `sourceMap: true`, so source navigation also works without a CSS extraction pipeline.
 
 ## Eval resolver modes
 

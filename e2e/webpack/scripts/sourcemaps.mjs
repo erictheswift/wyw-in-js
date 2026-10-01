@@ -7,6 +7,110 @@ import { SourceMapConsumer } from 'source-map';
 
 const require = createRequire(import.meta.url);
 
+export const assertAssetSourceMaps = async (pkgDir, useRspack) => {
+  const bundler = require(useRspack ? '@rspack/core' : 'webpack');
+  const dir = await fs.mkdtemp(path.join(pkgDir, 'asset-sourcemaps-'));
+  const entry = path.join(dir, 'entry.js');
+  const source =
+    "import { css } from '@wyw-in-js/template-tag-syntax';\nexport const title = css`color: red;`;\n";
+  await fs.writeFile(entry, source);
+  try {
+    for (const maps of [false, true]) {
+      for (const postcss of [false, true]) {
+        const out = path.join(dir, `${maps}-${postcss}`);
+        const compiler = bundler({
+          mode: 'development',
+          context: pkgDir,
+          entry,
+          devtool: false,
+          cache: false,
+          output: { path: out, filename: 'bundle.js' },
+          module: {
+            rules: [
+              {
+                test: /\.js$/,
+                use: [
+                  {
+                    loader: '@wyw-in-js/webpack-loader',
+                    options: { sourceMap: maps },
+                  },
+                ],
+              },
+              {
+                test: /\.wyw-in-js\.css$/,
+                type: 'asset/resource',
+                generator: { filename: 'styles.css' },
+                ...(postcss
+                  ? {
+                      use: [
+                        {
+                          loader: require.resolve('postcss-loader'),
+                          options: {
+                            sourceMap: maps,
+                            postcssOptions: { config: false, plugins: [] },
+                          },
+                        },
+                      ],
+                    }
+                  : {}),
+              },
+            ],
+          },
+        });
+        try {
+          await new Promise((resolve, reject) =>
+            compiler.run((error, stats) => {
+              if (error || stats.hasErrors() || stats.hasWarnings()) {
+                reject(
+                  error ??
+                    new Error(
+                      stats.toString({
+                        all: false,
+                        errors: true,
+                        warnings: true,
+                      })
+                    )
+                );
+              } else {
+                resolve();
+              }
+            })
+          );
+          const css = await fs.readFile(path.join(out, 'styles.css'), 'utf8');
+          const color = /color:\s*red\b/.exec(css);
+          assert(color, `Expected red CSS, got ${css}`);
+          const inlineMaps = [
+            ...css.matchAll(
+              /sourceMappingURL=data:application\/json;base64,([^*]+)\*\//g
+            ),
+          ];
+          assert.equal(inlineMaps.length, maps ? 1 : 0);
+          if (maps) {
+            const map = JSON.parse(
+              Buffer.from(inlineMaps[0][1], 'base64').toString()
+            );
+            assert.deepEqual(map.sourcesContent, [source]);
+            await SourceMapConsumer.with(map, null, (consumer) => {
+              const original = consumer.originalPositionFor({
+                line: 1,
+                column: color.index,
+              });
+              assert.equal(consumer.sourceContentFor(original.source), source);
+              assert.equal(original.line, 2);
+            });
+          }
+        } finally {
+          await new Promise((resolve, reject) =>
+            compiler.close((error) => (error ? reject(error) : resolve()))
+          );
+        }
+      }
+    }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+};
+
 export const assertSourceMaps = async (pkgDir, useRspack) => {
   const bundler = require(useRspack ? '@rspack/core' : 'webpack');
   const Extract = useRspack
@@ -112,8 +216,11 @@ export const assertSourceMaps = async (pkgDir, useRspack) => {
             !css.includes('sourceMappingURL=data:'),
             'CSS must not contain inline source maps'
           );
-          assert(css.includes(`color:${color}`));
-          assert(css.includes('border:1px solid blue'));
+          assert(
+            new RegExp(`color:\\s*${color}\\b`).test(css),
+            `Expected ${color} CSS, got ${css}`
+          );
+          assert(/border:\s*1px solid blue/.test(css));
           if (index === 1)
             assert.equal(
               css,
@@ -138,10 +245,14 @@ export const assertSourceMaps = async (pkgDir, useRspack) => {
               );
             await SourceMapConsumer.with(map, null, (consumer) => {
               for (const [property, content, line] of [
-                [`color:${color}`, entrySource, 3 + padding.length],
-                ['border:1px solid blue', secondSource, 2],
+                [
+                  new RegExp(`color:\\s*${color}\\b`),
+                  entrySource,
+                  3 + padding.length,
+                ],
+                [/border:\s*1px solid blue/, secondSource, 2],
               ]) {
-                const prefix = css.slice(0, css.indexOf(property));
+                const prefix = css.slice(0, css.search(property));
                 const original = consumer.originalPositionFor({
                   line: prefix.split('\n').length,
                   column: prefix.length - prefix.lastIndexOf('\n') - 1,
@@ -170,4 +281,5 @@ export const assertSourceMaps = async (pkgDir, useRspack) => {
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+  await assertAssetSourceMaps(pkgDir, useRspack);
 };

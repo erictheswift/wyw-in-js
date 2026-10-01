@@ -21,9 +21,21 @@ export default async function outputCssLoader(
     // does not need to duplicate machine-specific absolute paths.
     if (outputCssPayload) {
       const payload = decodeOutputCssPayload(outputCssPayload);
+      let { cssText } = payload;
+      const moduleType = this._module?.type;
+      if (
+        payload.cssSourceMapText &&
+        (moduleType === 'asset' || moduleType?.startsWith('asset/'))
+      ) {
+        // Asset modules emit the CSS bytes without consuming callback maps.
+        // CSS loader pipelines compose the callback map instead.
+        cssText += `/*# sourceMappingURL=data:application/json;base64,${Buffer.from(
+          payload.cssSourceMapText
+        ).toString('base64')}*/`;
+      }
       this.callback(
         null,
-        payload.cssText,
+        cssText,
         payload.cssSourceMapText
           ? JSON.parse(payload.cssSourceMapText)
           : undefined
