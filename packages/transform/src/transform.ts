@@ -31,6 +31,8 @@ import { disposeEvalBroker } from './eval/broker';
 import type { Handlers, Services } from './transform/types';
 import { configureEvalSession, getEvalCacheKey } from './transform/evalSession';
 import { isCacheEpochAbortedError } from './transform/actions/CacheEpochAbortedError';
+import { AbortError } from './transform/actions/AbortError';
+import { EntrypointEvictedError } from './transform/actions/EntrypointEvictedError';
 import { CacheRecoveryConvergenceError } from './transform/actions/CacheRecoveryConvergenceError';
 import type { Result } from './types';
 import {
@@ -136,6 +138,16 @@ const executeTransformAttempt = async (
     entrypoint.log('%s is ready', entrypoint.name);
 
     return result;
+  } catch (error) {
+    // Only eviction of this exact root can restart the top-level input.
+    // Foreign dependency failures and replacement publications stay fenced.
+    if (
+      error instanceof EntrypointEvictedError &&
+      error.entrypoint !== entrypoint
+    ) {
+      throw new AbortError('superseded');
+    }
+    throw error;
   } finally {
     disposeActionContext(actionContext);
   }
@@ -211,6 +223,7 @@ const executeTransform = async (
     return await activeCacheKeySaltLeases.run(activeLease, async () => {
       const retriedEpochs = new Set<number>();
       const allRetriedEpochs = new Set<number>();
+      let publicationRetries = 0;
 
       for (;;) {
         let cacheEpoch: TransformCacheEpoch | undefined;
@@ -237,7 +250,18 @@ const executeTransform = async (
             resolveImports,
             customHandlers
           );
-        } catch (error) {
+        } catch (caughtError) {
+          const error =
+            caughtError instanceof EntrypointEvictedError && cacheEpoch
+              ? cacheEpoch.owner.getEpochError(cacheEpoch) ?? caughtError
+              : caughtError;
+          if (
+            error instanceof EntrypointEvictedError &&
+            publicationRetries < MAX_CACHE_RECOVERY_RETRIES
+          ) {
+            publicationRetries += 1;
+            continue;
+          }
           const ownedEpochAbort =
             cacheEpoch !== undefined &&
             isCacheEpochAbortedError(error) &&

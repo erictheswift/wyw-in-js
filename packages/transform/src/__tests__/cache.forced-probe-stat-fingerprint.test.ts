@@ -98,4 +98,24 @@ describe('TransformCacheCollection: forced content probe', () => {
 
     expect(mockedReadFileSync).toHaveBeenCalledWith(depName, 'utf8');
   });
+
+  it.each(['direct', 'dependency'])(
+    'detects a same-size edit with unchanged mtime during a normal %s probe',
+    (probe) => {
+      cache
+        .get('entrypoints', parentName)!
+        .invalidateOnDependencyChange!.clear();
+      depContent = 'export const token = "tan";';
+      depStat = stat({ ...depStat, ctimeMs: 501 });
+
+      const changed =
+        probe === 'direct'
+          ? cache.checkFreshness(depName, depName)
+          : cache.invalidateIfChanged(parentName, parentContent);
+
+      expect(changed).toBe(true);
+      expect(cache.get('entrypoints', depName)).toBeUndefined();
+      expect(mockedReadFileSync).toHaveBeenCalledWith(depName, 'utf8');
+    }
+  );
 });

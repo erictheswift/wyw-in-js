@@ -255,6 +255,7 @@ function innerCreateEntrypoint(
     cache.createGraphTraversalToken(cacheEpoch, services.cacheRecoveryOwner);
   let changed = false;
   let currentCode = loadedCode;
+  let reusableLoadedCode: string | undefined;
   let unknownDependencyGraphs = new Set<string>();
   if (loadedCode !== undefined) {
     ({ changed, unknownDependencyGraphs } =
@@ -273,6 +274,7 @@ function innerCreateEntrypoint(
     }
 
     if (currentCode !== undefined) {
+      reusableLoadedCode = cache.getLoadedCode(name, currentCode);
       ({ changed, unknownDependencyGraphs } =
         cache.invalidateIfChangedWithDetails(
           name,
@@ -322,7 +324,10 @@ function innerCreateEntrypoint(
 
   const reusableEntrypoint =
     loadedCode === undefined ? cache.get('entrypoints', name) : undefined;
-  const entrypointCode = loadedCode ?? reusableEntrypoint?.initialCode;
+  // An unchanged source can lose its entrypoint when a dependency changes.
+  // Recover the preceding loader's output using its retained raw-byte proof.
+  const entrypointCode =
+    loadedCode ?? reusableEntrypoint?.initialCode ?? reusableLoadedCode;
   assertExpectedCached();
 
   let exports = recoveredFromUnknownGraph ? undefined : cached?.exports;

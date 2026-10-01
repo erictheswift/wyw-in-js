@@ -9,10 +9,22 @@ import type {
 } from 'oxc-parser';
 
 import type { CodeRemoverOptions } from '@wyw-in-js/shared';
+import {
+  unwrapExpression,
+  getMemberPropertyName,
+  isStringLikeExpression,
+  dynamicImportArgumentCode,
+} from './oxcPreevalSyntax';
 
 import { collectOxcExportsAndImports } from './collectOxcExportsAndImports';
 import { EventEmitter } from './EventEmitter';
 import { getOxcNodeChildren } from './oxc/ast';
+import {
+  isControlStatement,
+  removeEmptyControlStatements,
+  removeOwner,
+  type ControlStatement,
+} from './oxcDangerousCodeOwners';
 import { parseOxcProgramCached } from './parseOxc';
 
 type AnyNode = Node & Record<string, unknown>;
@@ -94,19 +106,6 @@ const defaultReactHocs = ['forwardRef', 'memo'];
 const generatedProcessorHelperNameRe = /^_exp\d*$/;
 const requireCallRe = /\brequire\s*\(/;
 const windowTokenRe = /\bwindow\b/;
-const removableOwnerTypes = new Set([
-  'DoWhileStatement',
-  'ExpressionStatement',
-  'ForInStatement',
-  'ForOfStatement',
-  'ForStatement',
-  'FunctionDeclaration',
-  'IfStatement',
-  'PropertyDefinition',
-  'ReturnStatement',
-  'VariableDeclaration',
-  'WhileStatement',
-]);
 const importMetaEnvRe = /\bimport\s*\.\s*meta\s*\.\s*env\b/;
 
 const createScope = (parent: Scope | null, key: string): Scope => ({
@@ -182,93 +181,6 @@ const getChildren = getOxcNodeChildren;
 
 const parseOxc = (code: string, filename: string): Program => {
   return parseOxcProgramCached(filename, code, 'unambiguous');
-};
-
-const unwrapExpression = (node: Expression): Expression => {
-  if (
-    node.type === 'TSAsExpression' ||
-    node.type === 'TSSatisfiesExpression' ||
-    node.type === 'TSNonNullExpression' ||
-    node.type === 'TSTypeAssertion' ||
-    node.type === 'ParenthesizedExpression'
-  ) {
-    return unwrapExpression(node.expression);
-  }
-
-  return node;
-};
-
-const getMemberPropertyName = (node: Node): string | null => {
-  if (node.type !== 'MemberExpression') {
-    return null;
-  }
-
-  if (node.computed) {
-    return node.property.type === 'Literal' &&
-      typeof node.property.value === 'string'
-      ? node.property.value
-      : null;
-  }
-
-  return node.property.type === 'Identifier' ? node.property.name : null;
-};
-
-const isStringLikeExpression = (node: Expression): boolean => {
-  const expression = unwrapExpression(node);
-
-  if (expression.type === 'Literal' && typeof expression.value === 'string') {
-    return true;
-  }
-
-  if (expression.type === 'TemplateLiteral') {
-    return true;
-  }
-
-  if (expression.type === 'BinaryExpression' && expression.operator === '+') {
-    return (
-      isStringLikeExpression(expression.left) ||
-      isStringLikeExpression(expression.right)
-    );
-  }
-
-  if (
-    expression.type === 'CallExpression' &&
-    expression.callee.type === 'MemberExpression' &&
-    getMemberPropertyName(expression.callee) === 'concat'
-  ) {
-    return isStringLikeExpression(expression.callee.object);
-  }
-
-  return false;
-};
-
-const templateLiteralToConcat = (code: string, node: Expression): string => {
-  if (node.type !== 'TemplateLiteral' || node.expressions.length === 0) {
-    return code.slice(node.start, node.end);
-  }
-
-  const parts: string[] = [];
-  node.quasis.forEach((quasi, index) => {
-    const cooked = quasi.value.cooked ?? quasi.value.raw;
-    if (cooked !== '') {
-      parts.push(JSON.stringify(cooked));
-    }
-
-    const expression = node.expressions[index];
-    if (expression) {
-      parts.push(code.slice(expression.start, expression.end));
-    }
-  });
-
-  return parts.length > 0 ? parts.join(' + ') : '""';
-};
-
-const dynamicImportArgumentCode = (code: string, node: Expression): string => {
-  if (node.type === 'TemplateLiteral') {
-    return templateLiteralToConcat(code, node);
-  }
-
-  return code.slice(node.start, node.end);
 };
 
 const evaluateStaticValue = (
@@ -932,34 +844,6 @@ function findLastAncestor(
   return null;
 }
 
-const findRemovableOwner = (node: Node, ancestors: Node[]): Node => {
-  let owner: Node = node;
-  let ownerAncestorIndex = -1;
-
-  if (!removableOwnerTypes.has(node.type)) {
-    for (let idx = ancestors.length - 1; idx >= 0; idx -= 1) {
-      const ancestor = ancestors[idx];
-      if (removableOwnerTypes.has(ancestor.type)) {
-        owner = ancestor;
-        ownerAncestorIndex = idx;
-        break;
-      }
-    }
-  }
-
-  const parent =
-    ownerAncestorIndex > 0 ? ancestors[ownerAncestorIndex - 1] : null;
-  if (
-    parent?.type === 'ExportNamedDeclaration' &&
-    'declaration' in parent &&
-    parent.declaration === owner
-  ) {
-    return parent;
-  }
-
-  return owner;
-};
-
 type ExportedBindingProtection = {
   start: number;
   end: number;
@@ -1602,6 +1486,7 @@ export const collectDangerousCodeReplacementsWithOxc = (
   }
 ): DangerousCodeReplacement[] => {
   const replacements: DangerousCodeReplacement[] = [];
+  const controlStatements: ControlStatement[] = [];
   const ignoredSpans = [...(planningOptions?.ignoredSpans ?? [])]
     .sort((a, b) => a.start - b.start)
     .reduce<Array<{ end: number; start: number }>>((result, span) => {
@@ -1684,6 +1569,10 @@ export const collectDangerousCodeReplacementsWithOxc = (
         return;
       }
 
+      if (isControlStatement(node)) {
+        controlStatements.push({ node, parent });
+      }
+
       if (node.type === 'JSXElement' || node.type === 'JSXFragment') {
         replacements.push(
           findFunctionReplacement(ancestors) ?? {
@@ -1755,8 +1644,7 @@ export const collectDangerousCodeReplacementsWithOxc = (
           return;
         }
 
-        const owner = findRemovableOwner(node, ancestors);
-        replacements.push({ start: owner.start, end: owner.end, value: '' });
+        replacements.push(removeOwner(node, ancestors));
         return;
       }
 
@@ -1871,12 +1759,14 @@ export const collectDangerousCodeReplacementsWithOxc = (
       }
 
       const promiseOwner = findPromiseCallbackOwner(ancestors);
-      const owner = promiseOwner
-        ? findRemovableOwner(promiseOwner, ancestors)
-        : findRemovableOwner(node, ancestors);
-      replacements.push({ start: owner.start, end: owner.end, value: '' });
+      replacements.push(removeOwner(promiseOwner ?? node, ancestors));
     }
   );
 
-  return normalizeReplacements(replacements);
+  return normalizeReplacements(
+    removeEmptyControlStatements(
+      normalizeReplacements(replacements),
+      controlStatements
+    )
+  );
 };

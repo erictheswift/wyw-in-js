@@ -1,5 +1,6 @@
 import evaluate, { type IEvaluateResult } from '../../evaluators';
 import { AbortError, isAborted } from '../actions/AbortError';
+import { EntrypointEvictedError } from '../actions/EntrypointEvictedError';
 import { isUnprocessedEntrypointError } from '../actions/UnprocessedEntrypointError';
 import { isCacheRecoveryFenceError } from '../actions/isCacheRecoveryControlError';
 import { createPrevalPayload } from '../prevalPayload';
@@ -33,6 +34,9 @@ export async function* evalFile(
       entrypoint.name
     );
     if (!entrypoint.isPublishedAs(expectedPublication)) {
+      if (expectedPublication === undefined) {
+        throw new EntrypointEvictedError(entrypoint);
+      }
       throw new AbortError('superseded');
     }
     const prevalPayload = createPrevalPayload({

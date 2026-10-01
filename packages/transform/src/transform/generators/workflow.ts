@@ -1,4 +1,5 @@
 import { AbortError, isAborted } from '../actions/AbortError';
+import { EntrypointEvictedError } from '../actions/EntrypointEvictedError';
 import type { IWorkflowAction, SyncScenarioForAction } from '../types';
 import { collectTransformDiagnostics } from '../../utils/TransformDiagnostics';
 import { toTransformResultMetadata } from '../../utils/TransformMetadata';
@@ -42,6 +43,7 @@ export function* workflow(
       current !== expected &&
       !(expected === entrypoint && entrypoint.isPublishedAs(current))
     ) {
+      if (current === undefined) throw new EntrypointEvictedError(entrypoint);
       throw new AbortError('superseded');
     }
   };

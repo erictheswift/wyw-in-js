@@ -970,12 +970,16 @@ export abstract class CacheLifecycle<
   private resetLifecycle(): void {
     const pendingUnknownGraphs = new Map(this.legacyPendingUnknownGraphs);
     const { resetVersion } = this;
-    this.clearAllCachesForRecovery();
-    this.resetVersion = resetVersion;
-    pendingUnknownGraphs.forEach((pending, filename) => {
-      this.legacyPendingUnknownGraphs.set(filename, pending);
+    // Recovery drops derived state, but unchanged disk bytes still prove the
+    // provenance of preceding loader output. Explicit clears discard it.
+    this.loadedSources.preserveDuringRecovery(() => {
+      this.clearAllCachesForRecovery();
+      this.resetVersion = resetVersion;
+      pendingUnknownGraphs.forEach((pending, filename) => {
+        this.legacyPendingUnknownGraphs.set(filename, pending);
+      });
+      this.resetFreshness();
     });
-    this.resetFreshness();
   }
 
   protected recordEntrypointsCleared(): void {

@@ -2,38 +2,21 @@ import fs from 'node:fs';
 import { logger } from '@wyw-in-js/shared';
 
 import type { TransformCacheEpoch } from './cacheLifecycle';
+import { isFileStatUnchanged, toFileStat, type FileStat } from './fileStat';
+import { LoadedSources } from './loadedSource';
 import {
+  createDependencySnapshot,
+  getEffectiveInvalidationDependencies,
   hashContent,
   type IBaseCachedEntrypoint,
   isEntrypointGraphIncomplete,
   isMissingFileError,
   type EntrypointDependencySnapshot,
+  type DependencyToCheck,
 } from './cacheTypes';
 import { stripQueryAndHash } from '../utils/parseRequest';
 
 const cacheLogger = logger.extend('cache');
-
-interface DependencyToCheck {
-  resolved: string | null;
-  readOnly?: boolean;
-}
-
-interface FileStat {
-  mtimeMs: number;
-  fingerprint: string | null;
-}
-
-// A write cannot preserve ctime, so a complete fingerprint proves the bytes
-// unchanged. Partial stats (mocks, exotic filesystems) fall back to reading.
-const toFileStat = (stats: fs.Stats): FileStat => ({
-  mtimeMs: stats.mtimeMs,
-  fingerprint:
-    Number.isFinite(stats.ctimeMs) &&
-    Number.isFinite(stats.size) &&
-    Number.isFinite(stats.ino)
-      ? `${stats.mtimeMs}\0${stats.ctimeMs}\0${stats.size}\0${stats.ino}`
-      : null,
-});
 
 export interface PendingUnknownGraph {
   dependencies: Set<string>;
@@ -47,6 +30,8 @@ export abstract class CacheFreshness<
   private readonly barrelManifestDependencies = new Map<string, Set<string>>();
 
   private contentHashes = new Map<string, { fs?: string; loaded?: string }>();
+
+  protected readonly loadedSources = new LoadedSources();
 
   private readonly pendingContentHashSynchronizations = new Map<
     string,
@@ -144,6 +129,7 @@ export abstract class CacheFreshness<
   }
 
   protected clearFreshnessForKeySalt(): void {
+    this.loadedSources.clear();
     this.publishedEntrypoints.clear();
     this.entrypointDependencySnapshots.clear();
     this.pendingContentHashSynchronizations.clear();
@@ -159,6 +145,7 @@ export abstract class CacheFreshness<
     key: string
   ): void {
     this.contentHashes.delete(key);
+    this.loadedSources.delete(key);
     this.pendingContentHashSynchronizations.delete(key);
     if (cacheName === 'entrypoints') {
       this.entrypointDependencySnapshots.delete(this.getKey(key));
@@ -184,6 +171,7 @@ export abstract class CacheFreshness<
   }
 
   protected onEntrypointsCleared(): void {
+    this.loadedSources.clear();
     this.publishedEntrypoints.clear();
     this.entrypointDependencySnapshots.clear();
     this.pendingContentHashSynchronizations.clear();
@@ -222,7 +210,13 @@ export abstract class CacheFreshness<
       }
 
       if (typeof resolvedCode === 'string') {
-        this.setContentHash(key, source, hashContent(resolvedCode), true);
+        this.setContentHash(
+          key,
+          source,
+          hashContent(resolvedCode),
+          true,
+          resolvedCode
+        );
         return;
       }
 
@@ -246,12 +240,18 @@ export abstract class CacheFreshness<
   }
 
   protected resetFreshness(): void {
+    this.loadedSources.clear();
     this.contentHashes.clear();
     this.pendingContentHashSynchronizations.clear();
     this.fileStats.clear();
     this.invalidatedFiles.clear();
     this.changedFileVersions.clear();
     this.consumedInvalidationVersions.clear();
+  }
+
+  /** @internal Recover preceding loader output after dependency invalidation. */
+  public getLoadedCode(filename: string, diskCode: string): string | undefined {
+    return this.loadedSources.get(filename, hashContent(diskCode));
   }
 
   protected snapshotEntrypointDependencies(
@@ -264,25 +264,13 @@ export abstract class CacheFreshness<
       return;
     }
 
-    const copy = (
-      dependencies: Map<string, { resolved: string | null }> | undefined
-    ): Map<string, { resolved: string | null }> =>
-      new Map(
-        Array.from(dependencies ?? [], ([key, dependency]) => [
-          key,
-          { resolved: dependency.resolved },
-        ])
-      );
-
-    this.entrypointDependencySnapshots.set(this.getKey(filename), {
-      invalidationVersion:
-        this.entrypointInvalidationVersions.get(entrypoint) ?? 0,
-      dependencies: copy(entrypoint.dependencies),
-      invalidationDependencies: copy(entrypoint.invalidationDependencies),
-      invalidateOnDependencyChange: new Set(
-        entrypoint.invalidateOnDependencyChange ?? []
-      ),
-    });
+    this.entrypointDependencySnapshots.set(
+      this.getKey(filename),
+      createDependencySnapshot(
+        entrypoint,
+        this.entrypointInvalidationVersions.get(entrypoint) ?? 0
+      )
+    );
   }
 
   protected snapshotReplacedEntrypoint(
@@ -509,7 +497,7 @@ export abstract class CacheFreshness<
 
     if (contentChanged || anyDepChanged) {
       cacheLogger('content has changed, invalidate all for %s', filename);
-      this.setContentHash(filename, source, newHash);
+      this.setContentHash(filename, source, newHash, false, content);
       this.invalidateChangedFile(filename);
       if (contentChanged) {
         this.forgetEntrypointDependencySnapshot(filename);
@@ -525,7 +513,7 @@ export abstract class CacheFreshness<
     }
 
     if (previousHash !== newHash) {
-      this.setContentHash(filename, source, newHash);
+      this.setContentHash(filename, source, newHash, false, content);
     }
     return anyDepGraphUnknown;
   }
@@ -606,20 +594,7 @@ export abstract class CacheFreshness<
     const snapshot = this.entrypointDependencySnapshots.get(
       this.getKey(filename)
     );
-    if (
-      fileEntrypoint &&
-      isEntrypointGraphIncomplete(fileEntrypoint) &&
-      snapshot
-    ) {
-      return new Set([
-        ...(snapshot.invalidateOnDependencyChange ?? []),
-        ...(fileEntrypoint.invalidateOnDependencyChange ?? []),
-      ]);
-    }
-    return (
-      fileEntrypoint?.invalidateOnDependencyChange ??
-      snapshot?.invalidateOnDependencyChange
-    );
+    return getEffectiveInvalidationDependencies(fileEntrypoint, snapshot);
   }
 
   private didDependencyChange(
@@ -642,7 +617,7 @@ export abstract class CacheFreshness<
     if (visitedFiles.has(dependencyFilename)) return false;
 
     const strippedFilename = stripQueryAndHash(dependencyFilename);
-    const cachedMtime = this.fileStats.get(dependencyFilename)?.mtimeMs;
+    const cachedStat = this.fileStats.get(dependencyFilename);
     const cachedEntrypoint = this.getEntrypoint(dependencyFilename);
     const hasSnapshot = this.entrypointDependencySnapshots.has(
       this.getKey(dependencyFilename)
@@ -679,10 +654,10 @@ export abstract class CacheFreshness<
       return true;
     }
 
-    if (cachedMtime !== undefined) {
-      let currentMtime: number;
+    if (cachedStat !== undefined) {
+      let currentStat: FileStat;
       try {
-        currentMtime = fs.statSync(strippedFilename).mtimeMs;
+        currentStat = toFileStat(fs.statSync(strippedFilename));
       } catch (error) {
         if (!isMissingFileError(error)) throw error;
         return this.recordMissingDependency(
@@ -693,7 +668,7 @@ export abstract class CacheFreshness<
         );
       }
 
-      if (currentMtime === cachedMtime) {
+      if (isFileStatUnchanged(currentStat, cachedStat)) {
         const dependencies =
           isReadOnlyLeaf && cachedEntrypoint
             ? new Map<string, DependencyToCheck>()
@@ -915,8 +890,7 @@ export abstract class CacheFreshness<
   public checkFreshness(filename: string, strippedFilename: string): boolean {
     try {
       const currentStat = toFileStat(fs.statSync(strippedFilename));
-      const cachedMtime = this.fileStats.get(filename)?.mtimeMs;
-      if (cachedMtime !== undefined && currentStat.mtimeMs === cachedMtime) {
+      if (isFileStatUnchanged(currentStat, this.fileStats.get(filename))) {
         return false;
       }
 
@@ -951,7 +925,8 @@ export abstract class CacheFreshness<
     filename: string,
     source: 'fs' | 'loaded',
     hash: string,
-    isPublication = false
+    isPublication = false,
+    loadedCode?: string
   ): void {
     const pending = this.pendingContentHashSynchronizations.get(filename);
     if (
@@ -966,8 +941,7 @@ export abstract class CacheFreshness<
     // baseline when first accepting loaded code, rather than comparing its
     // bytes with transformed output or trusting an unchanged timestamp later.
     // Republishing the same loaded revision must not hide an intervening edit.
-    const captureDiskBaseline =
-      source === 'loaded' && current?.loaded === undefined;
+    const captureDiskBaseline = source === 'loaded' && current?.loaded !== hash;
     if (current) current[source] = hash;
     else this.contentHashes.set(filename, { [source]: hash });
 
@@ -982,6 +956,14 @@ export abstract class CacheFreshness<
         // Virtual/missing sources have no raw baseline. A later unmatched fs
         // revision stays conservative; never infer equivalence from mtime.
       }
+    }
+
+    if (source === 'loaded' && loadedCode !== undefined) {
+      this.loadedSources.record(
+        filename,
+        loadedCode,
+        this.contentHashes.get(filename)?.fs
+      );
     }
 
     if (source === 'fs') {

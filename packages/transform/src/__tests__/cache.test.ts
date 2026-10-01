@@ -1088,7 +1088,10 @@ describe('TransformCacheCollection', () => {
       expect(cache.has('entrypoints', fileB)).toBe(false);
       expect(cache.has('entrypoints', fileA)).toBe(true);
       expect(mockedReadFileSync).toHaveBeenCalledWith(fileA, 'utf8');
-      expect(mockedReadFileSync).not.toHaveBeenCalledWith(fileB, 'utf8');
+      // Accepting a new loaded revision captures its raw disk baseline once.
+      expect(
+        mockedReadFileSync.mock.calls.filter(([file]) => file === fileB)
+      ).toHaveLength(1);
     });
   });
 
