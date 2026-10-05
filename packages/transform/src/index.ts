@@ -20,6 +20,13 @@ export type { WYWTransformDiagnostic } from './utils/TransformDiagnostics';
 export { Module, DefaultModuleImplementation } from './module';
 export { default as shaker, oxcShaker } from './shaker';
 export { transform } from './transform';
+export { createTransformPool, getDefaultTransformPoolSize } from './pool/pool';
+export type {
+  TransformPool,
+  TransformPoolJobOptions,
+  TransformPoolOptions,
+  TransformPoolResolver,
+} from './pool/pool';
 export { disposeEvalBroker } from './eval/broker';
 export {
   isUnprocessedEntrypointError,
