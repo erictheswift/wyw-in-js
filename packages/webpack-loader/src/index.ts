@@ -16,9 +16,16 @@ import {
   mergeOxcResolverAlias,
   toNativeResolverAlias,
 } from '@wyw-in-js/shared';
-import type { PluginOptions, Preprocessor, Result } from '@wyw-in-js/transform';
+import type {
+  PluginOptions,
+  Preprocessor,
+  Result,
+  TransformPool,
+} from '@wyw-in-js/transform';
 import {
+  createTransformPool,
   disposeEvalBroker,
+  getDefaultTransformPoolSize,
   transform,
   TransformCacheCollection,
 } from '@wyw-in-js/transform';
@@ -60,6 +67,12 @@ export type LoaderOptions = {
   cssImport?: 'require' | 'import';
   extension?: string;
   keepComments?: boolean | RegExp;
+  /**
+   * Run transforms in a pool of worker threads, `true` for the default size or
+   * a maximum worker count. Function-valued options must then come from a
+   * config file (`configFile`).
+   */
+  parallel?: boolean | number;
   prefixer?: boolean;
   preprocessor?: Preprocessor;
   sourceMap?: boolean;
@@ -129,6 +142,7 @@ type ResolverScope = {
 type CompilerState = ResolverScope & {
   clearResolvers: () => void;
   hooksInstalled: boolean;
+  pools: Map<string, TransformPool>;
 };
 
 const COMPILER_SCOPE_NAME = 'WYWinJSResolverScope';
@@ -203,6 +217,29 @@ const disposeCompilerState = (compiler: CompilerLike, state: CompilerState) => {
   state.clearResolvers();
   disposeEvalBroker(state.cache);
   clearCacheProviderRegistry(compiler);
+  state.pools.forEach((pool) => pool.dispose());
+  state.pools.clear();
+};
+
+// One pool per distinct option set of a compiler. Its workers keep their caches
+// across rebuilds and resolve through the compiler's stable resolver scope.
+const getTransformPool = (
+  state: CompilerState,
+  pluginOptions: Partial<PluginOptions>,
+  parallel: true | number
+): TransformPool => {
+  const key = JSON.stringify(pluginOptions);
+  let pool = state.pools.get(key);
+  if (!pool) {
+    pool = createTransformPool({
+      asyncResolve: state.asyncResolve,
+      asyncResolveKey: state.key,
+      pluginOptions,
+      workers: parallel === true ? getDefaultTransformPoolSize() : parallel,
+    });
+    state.pools.set(key, pool);
+  }
+  return pool;
 };
 
 const getCompilerState = (compiler: CompilerLike): CompilerState => {
@@ -219,6 +256,7 @@ const getCompilerState = (compiler: CompilerLike): CompilerState => {
     clearResolvers: scope.dispose,
     dispose: () => disposeCompilerState(compiler, state),
     hooksInstalled: false,
+    pools: new Map(),
   };
 
   const installHooks = () => {
@@ -385,31 +423,70 @@ const webpack5Loader: Loader = function webpack5LoaderPlugin(
     extension = '.wyw-in-js.css',
     cssImport = 'require',
     cacheProvider,
+    parallel = false,
     ...rest
   } = this.getOptions() || {};
 
   const outputFileName = this.resourcePath.replace(/\.[^.]+$/, extension);
 
-  const transformServices = {
-    options: {
-      filename: resourcePath,
-      inputSourceMap: convertSourceMap(inputSourceMap, resourcePath),
-      pluginOptions: {
-        ...rest,
-        oxcOptions: mergeOxcResolverAlias(rest.oxcOptions, nativeResolverAlias),
+  const pluginOptions = {
+    ...rest,
+    oxcOptions: mergeOxcResolverAlias(rest.oxcOptions, nativeResolverAlias),
+  };
+  const emitWarning = createWarningDispatcher(compilerState, resourcePath);
+
+  const runTransform = (): Promise<Result> => {
+    // Without a compiler there is no lifetime to own workers (a per-file scope),
+    // so such invocations keep transforming in-process.
+    if (parallel !== false && compiler) {
+      if (typeof preprocessor === 'function') {
+        throw new Error(
+          '[wyw-in-js] A preprocessor function cannot be sent to transform pool workers. ' +
+            "Use 'stylis' or 'none', or disable parallel."
+        );
+      }
+
+      return getTransformPool(
+        getCompilerState(compiler),
+        pluginOptions,
+        parallel
+      ).transform(
+        {
+          filename: resourcePath,
+          inputSourceMap: convertSourceMap(inputSourceMap, resourcePath),
+          keepComments,
+          prefixer,
+          preprocessor: preprocessor || undefined,
+          root: process.cwd(),
+        },
+        content.toString(),
+        emitWarning
+      );
+    }
+
+    return transform(
+      {
+        options: {
+          filename: resourcePath,
+          inputSourceMap: convertSourceMap(inputSourceMap, resourcePath),
+          pluginOptions,
+          prefixer,
+          keepComments,
+          preprocessor,
+          root: process.cwd(),
+        },
+        asyncResolveKey,
+        cache: transformCache,
+        emitWarning,
+        eventEmitter: sharedState.emitter,
       },
-      prefixer,
-      keepComments,
-      preprocessor,
-      root: process.cwd(),
-    },
-    asyncResolveKey,
-    cache: transformCache,
-    emitWarning: createWarningDispatcher(compilerState, resourcePath),
-    eventEmitter: sharedState.emitter,
+      content.toString(),
+      asyncResolve
+    );
   };
 
-  transform(transformServices, content.toString(), asyncResolve)
+  Promise.resolve()
+    .then(runTransform)
     .then(
       async (result: Result) => {
         try {

@@ -83,6 +83,32 @@ Use `hybrid` when evaluated imports may rely on webpack resolver plugins, query 
 `native` only when `oxc-resolver` can resolve all evaluated imports, or mirror webpack-only aliases in
 `oxcOptions.resolver.alias`.
 
+## Parallel transforms
+
+webpack runs loaders on one thread, so in large projects the WyW transform competes with the rest of the build for it. `parallel` moves transforms into worker threads owned by the compiler:
+
+```js
+module.exports = {
+  test: /\.[jt]sx?$/,
+  use: [
+    {
+      loader: '@wyw-in-js/webpack-loader',
+      options: {
+        configFile: require.resolve('./wyw-in-js.config.js'),
+        parallel: true, // or a maximum worker count
+        prefixer: false,
+      },
+    },
+  ],
+};
+```
+
+- Plugin options are cloned into each worker, so function-valued options (`classNameSlug`, `tagResolver`, `rules`, `overrideContext`, …) must live in the config file named by `configFile`. Loader options such as `prefixer`, `sourceMap`, `keepComments`, `extension` and `cssImport` stay in the loader options; `preprocessor` accepts only `'stylis'` or `'none'`.
+- Resolution still goes through webpack's resolver on the loader thread, so dependency tracking and watch mode behave as without `parallel`.
+- Each worker keeps its own transform cache and re-analyzes the dependencies shared by the files it transforms. The pool therefore starts with one worker and adds another only while all workers are busy and the loader thread is idle waiting for them, up to the configured maximum (by default the CPU count minus one, at most 4).
+- Each worker starts with a 1536 MB old-generation heap limit (raised automatically if a worker runs out of memory); without it worker heaps grow toward the process limit and mostly hold garbage. An explicit `--max-old-space-size` for the webpack process applies to every worker and overrides this limit, so leave it unset or size it for the bundler thread alone.
+- `WYWinJSDebugPlugin` events are not collected from workers. Without a compiler that has lifecycle hooks (for example Rspack parallel loaders) transforms stay in-process.
+
 ## Disabling vendor prefixing
 
 Stylis adds vendor-prefixed CSS by default. To disable it (and reduce CSS size), pass `prefixer: false`:
