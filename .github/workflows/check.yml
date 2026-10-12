@@ -16,6 +16,13 @@ jobs:
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
 
+      # Tests spawn `node` (for example the eval runner), so pin its version
+      # instead of taking whatever the runner image ships.
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.x
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -35,7 +42,7 @@ jobs:
       - name: Build
         run: bun run build
 
-      - name: ESLint
+      - name: Lint (ESLint, Prettier for e2e)
         run: bun run lint
 
       - name: Tests
