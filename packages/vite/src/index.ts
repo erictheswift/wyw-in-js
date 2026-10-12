@@ -328,11 +328,9 @@ export default function wywInJS({
   const clientCache = new TransformCacheCollection();
   const ssrCache = new TransformCacheCollection();
   const caches = new Set<TransformCacheCollectionType>([clientCache, ssrCache]);
-  let evalBrokersDisposed = false;
-
+  // Idempotent; the next evaluation starts a new eval runner. `build --watch`
+  // disposes after every build, so no runner outlives the watcher.
   const disposeEvalBrokers = () => {
-    if (evalBrokersDisposed) return;
-    evalBrokersDisposed = true;
     for (const cache of caches) {
       disposeEvalBroker(cache);
     }
