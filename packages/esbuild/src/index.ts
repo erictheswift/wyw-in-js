@@ -19,6 +19,7 @@ import type {
   PluginOptions,
   Preprocessor,
   IFileReporterOptions,
+  Result,
 } from '@wyw-in-js/transform';
 import {
   createParallelTransforms,
@@ -55,6 +56,56 @@ type EsbuildPluginOptions = {
 const supportedFilterFlags = new Set(['i', 'm', 's']);
 
 const nodeModulesRegex = /^(?:.*[\\/])?node_modules(?:[\\/].*)?$/;
+
+type AsyncResolve = (
+  what: string,
+  importer: string,
+  stack: string[]
+) => Promise<string | null>;
+
+const toWatchFile = (id: string | null | undefined): string | null => {
+  if (!id) return null;
+
+  const [file] = id.split('?', 1);
+  return isAbsolute(file) && !nodeModulesRegex.test(file) ? file : null;
+};
+
+/**
+ * Files outside `node_modules` whose edits must reload `importer`.
+ * `Result.dependencies` lists the root's own imports by specifier, with the
+ * resolution the transform used in `dependencyResolutions`, and the modules
+ * behind them by absolute path. Specifiers without a recorded resolution go
+ * through the esbuild resolver.
+ */
+const getWatchFiles = async (
+  result: Result,
+  importer: string,
+  resolve: AsyncResolve
+): Promise<string[]> => {
+  const resolutions = new Map(
+    (result.dependencyResolutions ?? []).map(({ resolved, source }) => [
+      source,
+      resolved,
+    ])
+  );
+
+  const files = await Promise.all(
+    (result.dependencies ?? []).map(async (dependency) => {
+      if (isAbsolute(dependency)) return toWatchFile(dependency);
+
+      const resolved = resolutions.get(dependency);
+      if (resolved !== undefined) return toWatchFile(resolved);
+
+      try {
+        return toWatchFile(await resolve(dependency, importer, [importer]));
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  return [...new Set(files.filter((file): file is string => file !== null))];
+};
 
 export default function wywInJS({
   debug,
@@ -357,6 +408,12 @@ export default function wywInJS({
           };
         }
 
+        // Evaluated imports are gone from the transformed code, so esbuild
+        // does not know about them. Without a watch file an edit of such a
+        // dependency would not trigger a rebuild in watch mode.
+        const watchFiles = await getWatchFiles(result, args.path, asyncResolve);
+        const watched = watchFiles.length > 0 ? { watchFiles } : {};
+
         if (result.cssText === '') {
           let contents = result.code;
 
@@ -371,6 +428,7 @@ export default function wywInJS({
             contents,
             loader,
             resolveDir,
+            ...watched,
           };
         }
 
@@ -397,6 +455,7 @@ export default function wywInJS({
           contents,
           loader,
           resolveDir,
+          ...watched,
         };
       });
     },
