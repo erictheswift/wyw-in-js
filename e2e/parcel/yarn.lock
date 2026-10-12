@@ -1,0 +1,5 @@
+# This file is not a yarn lockfile: bun installs this package from the
+# workspace root. Parcel takes the nearest directory with a lockfile, `.git` or
+# `.hg` file as the project root, and class names are hashed relative to it. In
+# a git worktree `.git` is a file, so without this marker the project root
+# would be the worktree root instead of this directory, as in a regular clone.
