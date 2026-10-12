@@ -1,4 +1,12 @@
 /* eslint-env jest */
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import vm from 'vm';
 
@@ -657,6 +665,95 @@ describe('shakeOxcToESM', () => {
     expect(result.imports.get('@radix-ui/react-tooltip')).toEqual([
       'side-effect',
     ]);
+  });
+
+  // Minified bundles reassign a few short names many times. In a function
+  // that runs at module load, that forms a dense alias graph, and a walk over
+  // every path of it never finished.
+  it('shakes a module-load function with a dense alias graph', () => {
+    const names = Array.from({ length: 40 }, (_, index) => `v${index}`);
+    const assignments = names.flatMap((name, index) =>
+      names.slice(index + 1).map((alias) => `  ${name} = ${alias};`)
+    );
+    const source = [
+      'export let value;',
+      '!function () {',
+      `  var ${names.join(', ')};`,
+      ...assignments,
+      `  ${names[names.length - 1]} = globalThis.seed;`,
+      '  value = v0;',
+      '}();',
+      'export const answer = 42;',
+    ].join('\n');
+
+    const answer = shakeOxcToESM(source, filename, {
+      onlyExports: ['answer'],
+    });
+    const value = shakeOxcToESM(source, filename, { onlyExports: ['value'] });
+
+    expect(answer.code.trim()).toBe('export const answer = 42;');
+    expect(value.code).toContain('value = v0;');
+    expect(value.code).not.toContain('answer');
+  }, 10_000);
+
+  describe('side-effect imports of files with importOverrides', () => {
+    let root: string;
+    let entry: string;
+    const source = dedent`
+      import './polyfill';
+
+      export const __wywPreval = {
+        value: () => 's1gxjcbn',
+      };
+    `;
+
+    beforeAll(() => {
+      root = realpathSync(mkdtempSync(join(tmpdir(), 'wyw-shaker-override-')));
+      mkdirSync(join(root, 'src'));
+      writeFileSync(join(root, 'src', 'polyfill.ts'), 'globalThis.x = 1;\n');
+      writeFileSync(join(root, 'src', 'polyfill-mock.ts'), 'export {};\n');
+      entry = join(root, 'src', 'entry.ts');
+      writeFileSync(entry, source);
+    });
+
+    afterAll(() => {
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    const shake = (importOverrides: Record<string, unknown>) =>
+      shakeOxcToESM(source, entry, {
+        importOverrides: importOverrides as never,
+        onlyExports: ['__wywPreval'],
+        root,
+      });
+
+    it.each([
+      ['mock', { mock: './src/polyfill-mock.ts' }],
+      ['noShake', { noShake: true }],
+    ])(
+      'keeps the import when %s is keyed by the canonical file path',
+      (_name, override) => {
+        const result = shake({ './src/polyfill.ts': override });
+
+        expect(result.code).toContain("import './polyfill'");
+        expect(result.imports.get('./polyfill')).toEqual(['side-effect']);
+      }
+    );
+
+    it('keeps the import when a pattern matches the canonical file path', () => {
+      const result = shake({ './src/*.ts': { noShake: true } });
+
+      expect(result.code).toContain("import './polyfill'");
+    });
+
+    it('drops the import when the override is for another file or only sets unknown', () => {
+      expect(shake({ './src/other.ts': { noShake: true } }).code).not.toContain(
+        "import './polyfill'"
+      );
+      expect(
+        shake({ './src/polyfill.ts': { unknown: 'allow' } }).code
+      ).not.toContain("import './polyfill'");
+    });
   });
 
   it('keeps declaration chains referenced by surviving exports', () => {

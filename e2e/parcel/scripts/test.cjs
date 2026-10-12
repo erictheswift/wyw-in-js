@@ -22,8 +22,7 @@ function normalizeLineEndings(value) {
  */
 function extractStylesheetHrefs(html) {
   const hrefs = [];
-  const linkRe =
-    /<link\s+[^>]*rel=(?:"|')stylesheet(?:"|')[^>]*>/gi;
+  const linkRe = /<link\s+[^>]*rel=(?:"|')stylesheet(?:"|')[^>]*>/gi;
   const hrefRe = /href=(?:"|')([^"']+)(?:"|')/i;
 
   const matches = html.match(linkRe) ?? [];

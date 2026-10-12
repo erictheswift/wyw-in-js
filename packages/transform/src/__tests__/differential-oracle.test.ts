@@ -1728,6 +1728,51 @@ const registerTests = (): void => {
       expect(reads).toBe(0);
     });
 
+    it.each([
+      ['a segment outside the sources', { mappings: 'ACAA' }],
+      ['a segment outside the names', { mappings: 'AAAAC' }],
+      ['a negative original line', { mappings: 'AAFA' }],
+      ['a segment of an invalid length', { mappings: 'AAA' }],
+      ['a non-base64 mappings character', { mappings: 'AA!A' }],
+      ['an unsupported version', { version: 2 }],
+    ])('fails closed on a source map with %s', async (_name, patch) => {
+      const trace = createSyntheticTrace();
+      getResult(trace).sourceMap = {
+        ...createSourceMap(),
+        ...patch,
+      } as unknown as Result['sourceMap'];
+
+      await expect(captureDifferentialTrace(trace)).rejects.toThrow(
+        'cannot decode source map'
+      );
+    });
+
+    it('orders segments of one generated column by their original position', async () => {
+      const withMappings = (mappings: string) => {
+        const trace = createSyntheticTrace();
+        getResult(trace).sourceMap = {
+          ...createSourceMap(),
+          mappings,
+          sources: ['a.ts', 'b.ts'],
+          sourcesContent: ['a\n', 'b\n'],
+        } as unknown as Result['sourceMap'];
+        return trace;
+      };
+
+      await expect(
+        assertDifferentialTraceEqual(
+          withMappings('AAAA,ACAA'),
+          withMappings('ACAA,ADAA')
+        )
+      ).resolves.toBeUndefined();
+      await expect(
+        assertDifferentialTraceEqual(
+          withMappings('AAAA,ACAA'),
+          withMappings('AAAA,CCAA')
+        )
+      ).rejects.toThrow('decodedMappings');
+    });
+
     it('normalizes only declared synthetic event ids and keeps semantic ids', () => {
       const events: CorpusEvent[] = [];
       const { assertSettled, eventEmitter } = createEventEmitter(

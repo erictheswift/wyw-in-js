@@ -180,6 +180,88 @@ describe('@wyw-in-js/babel-preset Oxc compatibility wrapper', () => {
     }
   });
 
+  describe('re-parses transformed code with the parser options of the file', () => {
+    let root: string;
+    let configFile: string;
+
+    beforeEach(() => {
+      root = mkdtempSync(path.join(tmpdir(), 'wyw-babel-preset-syntax-'));
+      configFile = path.join(root, 'wyw-in-js.config.cjs');
+      writeFileSync(
+        configFile,
+        [
+          'module.exports = {',
+          '  tagResolver(source, tag) {',
+          `    if (source === 'test-css-processor' && tag === 'css') return ${JSON.stringify(
+            processorPath
+          )};`,
+          '    return null;',
+          '  },',
+          '};',
+          '',
+        ].join('\n')
+      );
+    });
+
+    afterEach(() => {
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    const transformWithPresets = (
+      code: string,
+      basename: string,
+      presets: babel.PluginItem[]
+    ) =>
+      babel.transformSync(code, {
+        babelrc: false,
+        configFile: false,
+        filename: path.join(root, basename),
+        presets: [...presets, [wywInJS, { configFile }]],
+        root,
+        sourceType: 'module',
+      });
+
+    it('keeps JSX parseable when a wyw tag is transformed', () => {
+      const code = [
+        "import { css } from 'test-css-processor';",
+        'export const className = css`',
+        '  color: rebeccapurple;',
+        '`;',
+        'export const Box = () => <div className={className} />;',
+      ].join('\n');
+
+      const result = transformWithPresets(code, 'entry.jsx', [
+        ['@babel/preset-react', { runtime: 'automatic' }],
+      ]);
+
+      expect(extractCssText(result)).toContain('rebeccapurple');
+      expect(result?.code).not.toContain('css`');
+      expect(result?.code).not.toContain('<div');
+      expect(result?.code).toContain('react/jsx-runtime');
+    });
+
+    it('keeps TypeScript parseable when a wyw tag is transformed', () => {
+      const code = [
+        "import { css } from 'test-css-processor';",
+        "type Tone = 'dark' | 'light';",
+        "const tone: Tone = 'dark';",
+        'export const className: string = css`',
+        '  color: teal;',
+        '`;',
+        'export const isDark = (value: Tone): boolean => value === tone;',
+      ].join('\n');
+
+      const result = transformWithPresets(code, 'entry.ts', [
+        '@babel/preset-typescript',
+      ]);
+
+      expect(extractCssText(result)).toContain('teal');
+      expect(result?.code).not.toContain('css`');
+      expect(result?.code).not.toContain(': Tone');
+      expect(result?.code).toContain('export const isDark = value =>');
+    });
+  });
+
   it('parses TypeScript from sibling Babel presets without Babel config discovery', () => {
     const emitWarningSpy = jest
       .spyOn(process, 'emitWarning')

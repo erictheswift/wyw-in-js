@@ -37,7 +37,7 @@ export type Services = {
   emitWarning?: (message: string) => void;
   eventEmitter: EventEmitter;
   loadDependencyCode?: LoadDependencyCodeFn;
-  /** Stable semantic identity for the bundler dependency loader. */
+  /** @internal Stable semantic identity for the bundler dependency loader. */
   loadDependencyCodeKey?: string;
   loadAndParseFn: LoadAndParseFn;
   log: Debugger;

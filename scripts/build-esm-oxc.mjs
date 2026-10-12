@@ -5,7 +5,6 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -14,31 +13,9 @@ import { cwd, exit } from 'node:process';
 import { globSync } from 'glob';
 import { transformSync } from 'oxc-transform';
 
+import { rewriteRelativeSpecifiers } from './helpers/relative-specifiers.mjs';
+
 const DEFAULT_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json'];
-const KNOWN_EXTS = new Set([
-  '.ts',
-  '.tsx',
-  '.js',
-  '.jsx',
-  '.mjs',
-  '.cjs',
-  '.json',
-  '.css',
-  '.scss',
-  '.sass',
-  '.less',
-  '.svg',
-  '.png',
-  '.jpg',
-  '.jpeg',
-  '.gif',
-  '.webp',
-  '.avif',
-  '.txt',
-  '.md',
-  '.wasm',
-  '.node',
-]);
 
 const args = parseArgs(process.argv.slice(2));
 const packageRoot = cwd();
@@ -105,7 +82,10 @@ for (const filename of files) {
   }
 
   const rewrittenCode = inlineOxcUsingHelper(
-    rewriteRelativeSpecifiers(result.code, filename, outputExtension)
+    rewriteRelativeSpecifiers(result.code, filename, {
+      extension: outputExtension,
+      resolveExtensions: DEFAULT_EXTS,
+    })
   );
   const map = normalizeSourceMap(result.map, filename, outFilename, source);
 
@@ -200,93 +180,6 @@ function readPackageBuildIgnores(packageJson) {
   return Array.isArray(ignored)
     ? ignored.filter((item) => typeof item === 'string')
     : [];
-}
-
-function rewriteRelativeSpecifiers(code, filename, extension) {
-  return code
-    .replace(
-      /(\bimport\s+(?:[^'"]*?\s+from\s*)?)(['"])([^'"\n]+)\2/g,
-      (match, prefix, quote, value) =>
-        replaceSpecifier(match, prefix, quote, value, filename, extension)
-    )
-    .replace(
-      /(\bexport\s+(?:\*|{[\s\S]*?})\s+from\s*)(['"])([^'"\n]+)\2/g,
-      (match, prefix, quote, value) =>
-        replaceSpecifier(match, prefix, quote, value, filename, extension)
-    )
-    .replace(
-      /(\bimport\s*\(\s*)(['"])([^'"\n]+)\2/g,
-      (match, prefix, quote, value) =>
-        replaceSpecifier(match, prefix, quote, value, filename, extension)
-    );
-}
-
-function replaceSpecifier(match, prefix, quote, value, filename, extension) {
-  const rewritten = rewriteSpecifier(value, filename, extension);
-  if (!rewritten || rewritten === value) {
-    return match;
-  }
-
-  return `${prefix}${quote}${rewritten}${quote}`;
-}
-
-function rewriteSpecifier(value, filename, extension) {
-  if (!value || !isRelative(value) || hasQueryOrHash(value)) {
-    return null;
-  }
-
-  // TypeScript's nodenext resolution requires `.js` specifiers for sibling
-  // `.ts` sources; point them at the extension this build emits.
-  if (extension !== '.js' && value.endsWith('.js')) {
-    const source = path.resolve(path.dirname(filename), value.slice(0, -3));
-    if (existsSync(`${source}.ts`) || existsSync(`${source}.tsx`)) {
-      return `${value.slice(0, -3)}${extension}`;
-    }
-  }
-
-  if (hasKnownExtension(value)) {
-    return null;
-  }
-
-  let rewritten = `${value}${extension}`;
-  const baseDir = path.dirname(filename);
-  const resolved = path.resolve(baseDir, value);
-
-  try {
-    if (resolveWithExtensions(resolved)) {
-      rewritten = `${value}${extension}`;
-    } else if (existsSync(resolved) && statSync(resolved).isDirectory()) {
-      rewritten = `${value.replace(/\/$/, '')}/index${extension}`;
-    } else if (resolveIndexWithExtensions(resolved)) {
-      rewritten = `${value.replace(/\/$/, '')}/index${extension}`;
-    }
-  } catch {
-    // Keep previous build behavior: fall back to appending the package extension.
-  }
-
-  return rewritten;
-}
-
-function isRelative(value) {
-  return value.startsWith('./') || value.startsWith('../');
-}
-
-function hasKnownExtension(value) {
-  return KNOWN_EXTS.has(path.extname(value));
-}
-
-function hasQueryOrHash(value) {
-  return value.includes('?') || value.includes('#');
-}
-
-function resolveWithExtensions(basePath) {
-  return DEFAULT_EXTS.some((ext) => existsSync(`${basePath}${ext}`));
-}
-
-function resolveIndexWithExtensions(basePath) {
-  return DEFAULT_EXTS.some((ext) =>
-    existsSync(path.join(basePath, `index${ext}`))
-  );
 }
 
 function inlineOxcUsingHelper(code) {

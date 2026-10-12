@@ -5,7 +5,6 @@ import * as babel from '@babel/core';
 
 import { shaker } from '../shaker';
 import { Entrypoint } from '../transform/Entrypoint';
-import { parseFile } from '../transform/Entrypoint.helpers';
 import { prepareCode } from '../transform/generators/transform';
 import { loadWywOptions } from '../transform/helpers/loadWywOptions';
 import { withDefaultServices } from '../transform/helpers/withDefaultServices';
@@ -96,11 +95,7 @@ describe('dynamic import warnings', () => {
         throw new Error('Unexpected ignored entrypoint in test fixture');
       }
 
-      const ast = parseFile(babel, inputFilePath, sourceCode, {
-        root,
-      });
-
-      prepareCode(services, entrypoint, ast);
+      prepareCode(services, entrypoint, null);
 
       const warning = warnSpy.mock.calls
         .map((call) => String(call[0]))
@@ -146,11 +141,7 @@ export function foo() {
         throw new Error('Unexpected ignored entrypoint in test');
       }
 
-      const ast = parseFile(babel, inputFilePath, sourceCode, {
-        root,
-      });
-
-      prepareCode(services, entrypoint, ast);
+      prepareCode(services, entrypoint, null);
 
       const hasDynamicImportWarning = warnSpy.mock.calls.some((call) =>
         String(call[0]).includes('Dynamic imports reached prepare stage')

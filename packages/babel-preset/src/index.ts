@@ -292,11 +292,13 @@ function oxcCompatibilityPlugin(
       const result = runSyncTransform(payload);
 
       if (result.code && result.code !== payload.code) {
+        // The transformed code keeps JSX and TypeScript syntax, so it must be
+        // parsed with the syntax plugins of the file's own Babel config.
         const ast = parseSync(result.code, {
           babelrc: false,
           configFile: false,
           filename: payload.filename,
-          sourceType: 'module',
+          parserOpts: { ...file.opts.parserOpts, sourceType: 'module' },
         });
 
         if (ast?.program) {

@@ -202,6 +202,10 @@ type AllFeatureFlags = {
   globalCache: FeatureFlag;
   happyDOM: FeatureFlag;
   softErrors: FeatureFlag;
+  /**
+   * @deprecated Affects only the deprecated in-process `Module` evaluator,
+   * which `transform()` no longer uses. The flag will have no effect in 3.0.
+   */
   useWeakRefInEval: FeatureFlag;
 };
 

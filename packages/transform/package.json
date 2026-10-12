@@ -51,7 +51,7 @@
   },
   "scripts": {
     "build:esm": "node ../../scripts/build-esm-oxc.mjs",
-    "build:types": "tsc --project ./tsconfig.lib.json --baseUrl . --rootDir ./src",
+    "build:types": "tsc --project ./tsconfig.lib.json --baseUrl . --rootDir ./src && node ../../scripts/rewrite-dts-specifiers.mjs",
     "lint": "eslint --ext .js,.ts .",
     "perf:complex-scenarios": "bun run ./scripts/perf-complex-scenarios.ts",
     "perf:extract-stylis": "bun run ./scripts/perf-extract-stylis.ts",
