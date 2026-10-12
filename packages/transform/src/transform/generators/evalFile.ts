@@ -2,7 +2,6 @@ import evaluate, { type IEvaluateResult } from '../../evaluators';
 import { getEvalStrategy } from '../../utils/evalStrategy';
 import { AbortError, isAborted } from '../actions/AbortError';
 import { EntrypointEvictedError } from '../actions/EntrypointEvictedError';
-import { isUnprocessedEntrypointError } from '../actions/UnprocessedEntrypointError';
 import { isCacheRecoveryFenceError } from '../actions/isCacheRecoveryControlError';
 import { createPrevalPayload } from '../prevalPayload';
 import type { AsyncScenarioForAction, IEvalAction } from '../types';
@@ -77,12 +76,7 @@ export async function* evalFile(
         () => evaluate(this.services, entrypoint)
       );
     } catch (e) {
-      if (isUnprocessedEntrypointError(e)) {
-        entrypoint.log(
-          'Evaluation has been aborted because one if the required files is not processed. Schedule reprocessing and repeat evaluation.'
-        );
-        yield ['processEntrypoint', e.entrypoint, undefined];
-      } else if (isRetriableDependencyAbort(e)) {
+      if (isRetriableDependencyAbort(e)) {
         dependencyAborts += 1;
         entrypoint.log(
           'Evaluation has been aborted by a replaced dependency. Repeat evaluation (%d/%d).',
