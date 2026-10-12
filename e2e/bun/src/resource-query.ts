@@ -4,6 +4,6 @@ import rawText from './sample-asset.txt?raw';
 import assetUrl from './sample-asset.txt?url';
 
 export const classA = css`
-  content: "${String(rawText).trim()}";
-  --asset-url: "${String(assetUrl)}";
+  content: '${String(rawText).trim()}';
+  --asset-url: '${String(assetUrl)}';
 `;

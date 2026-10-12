@@ -7,4 +7,3 @@ const classA = css`
 `;
 
 export { classA };
-
