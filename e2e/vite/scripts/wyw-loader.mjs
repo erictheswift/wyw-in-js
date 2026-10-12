@@ -10,7 +10,10 @@ const ALIASES = new Map([
   ['@wyw-in-js/processor-utils', 'packages/processor-utils/src/index.ts'],
   ['@wyw-in-js/shared', 'packages/shared/src/index.ts'],
   ['@wyw-in-js/transform', 'packages/transform/src/index.ts'],
-  ['@wyw-in-js/template-tag-syntax', 'examples/template-tag-syntax/src/index.ts'],
+  [
+    '@wyw-in-js/template-tag-syntax',
+    'examples/template-tag-syntax/src/index.ts',
+  ],
   ['@wyw-in-js/webpack-loader', 'packages/webpack-loader/src/index.ts'],
   ['@wyw-in-js/vite', 'packages/vite/src/index.ts'],
 ]);

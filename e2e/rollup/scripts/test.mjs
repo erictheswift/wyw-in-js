@@ -43,12 +43,9 @@ const main = async () => {
     path.resolve(PKG_DIR, 'dist', 'styles.css'),
     'utf8'
   );
-  const cssOutput = await prettier.format(
-    normalizeLineEndings(cssOutputRaw),
-    {
-      parser: 'css',
-    }
-  );
+  const cssOutput = await prettier.format(normalizeLineEndings(cssOutputRaw), {
+    parser: 'css',
+  });
   const cssFixture = normalizeLineEndings(
     await fs.readFile(path.resolve(PKG_DIR, 'fixture.css'), 'utf8')
   );
