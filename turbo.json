@@ -3,7 +3,8 @@
   "globalDependencies": [
     "tsconfig.json",
     "scripts/build-esm-oxc.mjs",
-    "scripts/helpers/relative-specifiers.mjs"
+    "scripts/helpers/relative-specifiers.mjs",
+    "scripts/rewrite-dts-specifiers.mjs"
   ],
   "extends": ["//"],
   "pipeline": {
