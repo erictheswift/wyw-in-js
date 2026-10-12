@@ -466,6 +466,7 @@ export abstract class CacheLifecycle<
       : this.legacyGlobalRecoveryError?.error ?? null;
   }
 
+  /** @internal Recovery errors are thrown by transform attempts. */
   public getRecoveryError(
     filename: string,
     sinceVersion: number,
@@ -487,6 +488,7 @@ export abstract class CacheLifecycle<
       : null;
   }
 
+  /** @internal Recovery errors are thrown by transform attempts. */
   public getScopedRecoveryError(
     version: number,
     visited: ReadonlySet<string>
@@ -502,6 +504,7 @@ export abstract class CacheLifecycle<
     return this.legacyGlobalRecoveryError?.error;
   }
 
+  /** @deprecated Will be removed in 3.0. */
   public createGraphTraversalToken(): object;
   /** @internal An explicit epoch may only come from a transform attempt. */
   public createGraphTraversalToken(epoch: TransformCacheEpoch): object;
@@ -613,6 +616,7 @@ export abstract class CacheLifecycle<
     this.epochOwner.legacyPendingUnknownGraphs.delete(filename);
   }
 
+  /** @deprecated Will be removed in 3.0. */
   public beginUnknownGraphRecovery(
     filename: string,
     unknownDependencies: ReadonlySet<string>,
@@ -790,6 +794,7 @@ export abstract class CacheLifecycle<
     );
   }
 
+  /** @deprecated Will be removed in 3.0. */
   public beginSupersedeStormRecovery(error: Error, filename?: string): void;
   /** @internal An explicit epoch may only come from a transform attempt. */
   public beginSupersedeStormRecovery(
