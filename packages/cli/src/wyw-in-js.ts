@@ -22,6 +22,7 @@ import { hideBin } from 'yargs/helpers';
 
 import { reportTransformDiagnostics } from './diagnostics';
 import { createMetadataFile } from './metadata';
+import { createSourceRootLocator } from './source-root';
 
 const modulesOptions = [
   'commonjs',
@@ -176,6 +177,17 @@ function resolveOutputFilename(
   return path.join(outDir, outputFolder, outputBasename);
 }
 
+// `stat` follows symlinks, so a link to a directory is skipped like the
+// directory. A path that cannot be read, such as a broken link, fails when the
+// file is read, as before.
+function isDirectory(filename: string) {
+  try {
+    return fs.statSync(filename).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 async function processFiles(files: (number | string)[], options: Options) {
   const { emitter, onDone } = createFileReporter(
     options.debug ? { dir: options.debug, print: true } : false
@@ -212,19 +224,22 @@ async function processFiles(files: (number | string)[], options: Options) {
       root: options.sourceRoot,
     })) ?? null;
 
+  const locateInSourceRoot = createSourceRootLocator(options.sourceRoot);
   const modifiedFiles: { content: string; name: string }[] = [];
 
   const tasks: (() => Promise<boolean>)[] = [];
 
   // eslint-disable-next-line no-restricted-syntax
   for (const filename of resolvedFiles) {
-    if (fs.lstatSync(filename).isDirectory()) {
+    if (isDirectory(filename)) {
       // eslint-disable-next-line no-continue
       continue;
     }
 
+    // Output paths only: transform() and file reads keep the matched path.
+    const sourceFilename = locateInSourceRoot(filename);
     const outputFilename = resolveOutputFilename(
-      filename,
+      sourceFilename,
       options.outDir,
       options.sourceRoot
     );
@@ -283,7 +298,7 @@ async function processFiles(files: (number | string)[], options: Options) {
               outputRoot: options.outDir,
               outputFilename,
               sourceRoot: options.sourceRoot,
-              sourceFilename: filename,
+              sourceFilename,
             });
 
             fs.writeFileSync(metadataFile.filename, metadataFile.content);
@@ -311,7 +326,7 @@ async function processFiles(files: (number | string)[], options: Options) {
           if (options.sourceRoot && options.insertCssRequires) {
             const inputFilename = path.resolve(
               options.insertCssRequires,
-              path.relative(options.sourceRoot, filename)
+              path.relative(options.sourceRoot, sourceFilename)
             );
 
             const relativePath = normalize(
