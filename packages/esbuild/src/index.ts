@@ -69,8 +69,6 @@ export default function wywInJS({
   transformLibraries,
   ...rest
 }: EsbuildPluginOptions = {}): Plugin {
-  let options = esbuildOptions;
-  const cache = new TransformCacheCollection();
   const shouldRunOxcTransform = oxcTransform ?? false;
   const resolvedWywOptions = shouldRunOxcTransform
     ? loadWywOptions(rest)
@@ -102,6 +100,11 @@ export default function wywInJS({
   return {
     name: 'wyw-in-js',
     setup(build) {
+      // The cache and its eval broker belong to this build: `onEnd` disposes
+      // the broker, which must not reject evaluations of another build that
+      // shares the plugin instance. Rebuilds of this build keep the cache.
+      const cache = new TransformCacheCollection();
+      let options = esbuildOptions;
       const cssLookup = new Map<string, string>();
       const cssResolveDirs = new Map<string, string>();
       const warnedFilters = new Set<string>();
