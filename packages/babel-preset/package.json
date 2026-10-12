@@ -35,7 +35,8 @@
   "scripts": {
     "build:esm": "node ../../scripts/build-esm-oxc.mjs",
     "build:types": "tsc --project ./tsconfig.lib.json --baseUrl . --rootDir ./src",
-    "lint": "eslint --ext .js,.ts ."
+    "lint": "eslint --ext .js,.ts .",
+    "test": "bun test --timeout 30000 src"
   },
   "types": "types/index.d.ts"
 }
