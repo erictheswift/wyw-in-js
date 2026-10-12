@@ -17,6 +17,13 @@ const servicesFor = (code: string) =>
 const proxyOf = (code: string, only: string[]) =>
   buildDirectBarrelProxy(servicesFor(code), '/project/A.ts', only);
 
+const styledReexport = [
+  "import { css } from 'test-css-processor';",
+  "import { accent } from './theme';",
+  "export { accent as tone } from './theme';",
+  'export const style = css`background: ${accent};`;',
+].join('\n');
+
 describe('buildDirectBarrelProxy', () => {
   it('stands for a barrel without code of its own', () => {
     const proxy = proxyOf(
@@ -31,16 +38,12 @@ describe('buildDirectBarrelProxy', () => {
     expect(proxy?.only).toEqual(['__wywPreval', 'accent']);
   });
 
-  it('covers only the re-exported names of a module with exports of its own', () => {
-    const proxy = proxyOf(
-      [
-        "import { css } from 'test-css-processor';",
-        "import { accent } from './theme';",
-        "export { accent as tone } from './theme';",
-        'export const style = css`background: ${accent};`;',
-      ].join('\n'),
-      ['__wywPreval', 'side-effect', 'tone']
-    );
+  it('is not built for a module with exports of its own when the load asks for __wywPreval', () => {
+    expect(proxyOf(styledReexport, ['__wywPreval', 'tone'])).toBeNull();
+  });
+
+  it('stands for the re-exported names of a module with exports of its own', () => {
+    const proxy = proxyOf(styledReexport, ['tone']);
 
     expect(proxy?.code).toBe('export { accent as tone } from "./theme";\n');
     expect(proxy?.only).toEqual(['tone']);

@@ -403,7 +403,9 @@ export const barrelScenarios: FreshnessScenario[] = [
       {
         do: 'transform',
         calls: [{ file: 'page.ts' }],
-        note: 'eval page.ts загружает A.ts как barrel: прокси только для accent',
+        note:
+          'загрузка A.ts из eval page.ts несёт __wywPreval: A.ts готовится ' +
+          'из своего кода, прокси реэкспорта не строится',
         expect: {
           css: { 'page.ts': pageCss('blue') },
           prepared: ['page.ts', 'palette.ts', 'theme.ts'],
@@ -413,11 +415,11 @@ export const barrelScenarios: FreshnessScenario[] = [
       {
         do: 'transform',
         calls: [{ file: 'A.ts' }],
-        note: 'прокси не подменяет A.ts в его собственном eval',
+        note: 'eval A.ts берёт модуль, подготовленный для page.ts',
         expect: {
           css: { 'A.ts': moduleCss('blue') },
           prepared: ['A.ts'],
-          evaluated: ['A.ts'],
+          evaluated: [],
         },
       },
       {
@@ -425,12 +427,8 @@ export const barrelScenarios: FreshnessScenario[] = [
         calls: [{ file: 'page.ts' }, { file: 'A.ts' }],
         expect: {
           css: { 'page.ts': pageCss('blue'), 'A.ts': moduleCss('blue') },
-          prepared: ['A.ts'],
-          evaluated: [],
+          ...fromCache,
         },
-        knownBug: rootCopyNarrowed(
-          'Холостой transform сразу после холодной сборки.'
-        ),
       },
       { do: 'write', files: { 'palette.ts': runtimeValue('base', 'red') } },
       {
@@ -449,6 +447,18 @@ export const barrelScenarios: FreshnessScenario[] = [
           css: { 'A.ts': moduleCss('red') },
           prepared: ['A.ts'],
           evaluated: ['A.ts'],
+        },
+        knownBug: {
+          impact: 'performance',
+          description:
+            'Код A.ts снова отправляется в eval-раннер, хотя eval page.ts ' +
+            'на предыдущем шаге уже исполнил свежий A.ts. Готовя A.ts для ' +
+            'eval page.ts, брокер заново создаёт entrypoint A.ts; проверка ' +
+            'свежести находит устаревшей его публикацию до правки и снова ' +
+            'помечает A.ts инвалидированным, уже после того как эта загрузка ' +
+            'забрала прежнюю пометку. Загрузка корня A.ts забирает оставшуюся ' +
+            'пометку и сбрасывает модуль в раннере.',
+          intended: { evaluated: [] },
         },
       },
     ],
@@ -474,7 +484,7 @@ export const barrelScenarios: FreshnessScenario[] = [
         expect: {
           css: { 'A.ts': moduleCss('blue') },
           prepared: ['A.ts'],
-          evaluated: ['A.ts'],
+          evaluated: [],
         },
       },
     ],
@@ -564,12 +574,9 @@ export const barrelScenarios: FreshnessScenario[] = [
         expect: {
           css: { 'A.ts': moduleCss('blue') },
           prepared: ['A.ts'],
-          evaluated: ['A.ts'],
+          evaluated: [],
         },
-        knownBug: rootCopyNarrowed(
-          'Холостой transform. Кроме того, eval page.ts загрузил A.ts как ' +
-            'прокси, и код A.ts снова отправляется в eval-раннер.'
-        ),
+        knownBug: rootCopyNarrowed('Холостой transform.'),
       },
     ],
   },
