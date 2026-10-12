@@ -1,6 +1,13 @@
 import { inspect } from 'node:util';
 
-import { SourceMapConsumer } from 'source-map';
+import {
+  decodedMappings as decodeTraceMappings,
+  FlattenMap,
+} from '@jridgewell/trace-mapping';
+import type {
+  SectionedSourceMapInput,
+  SourceMapSegment,
+} from '@jridgewell/trace-mapping';
 
 import type { Result } from '../../types';
 
@@ -90,7 +97,6 @@ type SourceMapSnapshot = {
   decodedMappings: Array<{
     generatedColumn: number;
     generatedLine: number;
-    lastGeneratedColumn: number | null;
     name: string | null;
     originalColumn: number | null;
     originalLine: number | null;
@@ -342,6 +348,91 @@ class ArtifactEncoder {
   }
 }
 
+const VLQ_MAPPINGS = /^[A-Za-z0-9+/,;]*$/u;
+// A base64 VLQ value ends with a digit below 32, that is with A-Z or a-f.
+const VLQ_VALUE_END = /[A-Za-f]/gu;
+
+// The decoder pads a truncated segment with zeros, so the number of values per
+// segment is checked on the encoded string.
+const assertEncodedMappings = (mappings: string): void => {
+  if (!VLQ_MAPPINGS.test(mappings)) {
+    throw new Error('mappings contain a non-base64 VLQ character');
+  }
+
+  mappings.split(';').forEach((line, lineIndex) => {
+    line.split(',').forEach((segment) => {
+      if (segment === '') return;
+      const values = segment.match(VLQ_VALUE_END)?.length ?? 0;
+      if (![1, 4, 5].includes(values) || !/[A-Za-f]$/u.test(segment)) {
+        throw new Error(`invalid segment ${segment} on line ${lineIndex + 1}`);
+      }
+    });
+  });
+};
+
+const isIndex = (value: number | undefined, length = Infinity): boolean =>
+  value !== undefined &&
+  Number.isInteger(value) &&
+  value >= 0 &&
+  value < length;
+
+// Segments of one generated column are ordered by their original position, so
+// the order in which a generator emitted them does not count as a difference.
+const compareSegments = (
+  left: Readonly<SourceMapSegment>,
+  right: Readonly<SourceMapSegment>
+): number => {
+  for (let index = 0; index < 5; index += 1) {
+    const difference = (left[index] ?? -1) - (right[index] ?? -1);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+};
+
+const decodeSourceMapMappings = (
+  map: Record<string, unknown>
+): SourceMapSnapshot['decodedMappings'] => {
+  if (Number(map.version) !== 3) {
+    throw new Error(`unsupported version ${String(map.version)}`);
+  }
+  if (typeof map.mappings === 'string') {
+    assertEncodedMappings(map.mappings);
+  }
+
+  const traceMap = new FlattenMap(map as unknown as SectionedSourceMapInput);
+  const { names, resolvedSources } = traceMap;
+  const mappings: SourceMapSnapshot['decodedMappings'] = [];
+  decodeTraceMappings(traceMap).forEach((line, lineIndex) => {
+    [...line].sort(compareSegments).forEach((segment) => {
+      const [generatedColumn, sourceIndex, line0, column, nameIndex] = segment;
+      const hasSource = segment.length >= 4;
+      if (
+        ![1, 4, 5].includes(segment.length) ||
+        !isIndex(generatedColumn) ||
+        (hasSource &&
+          (!isIndex(sourceIndex, resolvedSources.length) ||
+            !isIndex(line0) ||
+            !isIndex(column))) ||
+        (segment.length === 5 && !isIndex(nameIndex, names.length))
+      ) {
+        throw new Error(
+          `invalid segment [${segment.join(',')}] on line ${lineIndex + 1}`
+        );
+      }
+
+      mappings.push({
+        generatedColumn,
+        generatedLine: lineIndex + 1,
+        name: segment.length === 5 ? names[nameIndex!] : null,
+        originalColumn: hasSource ? column! : null,
+        originalLine: hasSource ? line0! + 1 : null,
+        source: hasSource ? resolvedSources[sourceIndex!] : null,
+      });
+    });
+  });
+  return mappings;
+};
+
 const snapshotSourceMap = async (
   value: unknown,
   path: string
@@ -413,29 +504,7 @@ const snapshotSourceMap = async (
 
   let decodedMappings: SourceMapSnapshot['decodedMappings'];
   try {
-    decodedMappings = await SourceMapConsumer.with(
-      safeMap as unknown as Parameters<typeof SourceMapConsumer.with>[0],
-      null,
-      (consumer) => {
-        const mappings: SourceMapSnapshot['decodedMappings'] = [];
-        consumer.eachMapping(
-          (mapping) => {
-            mappings.push({
-              generatedColumn: mapping.generatedColumn,
-              generatedLine: mapping.generatedLine,
-              lastGeneratedColumn: mapping.lastGeneratedColumn,
-              name: mapping.name ?? null,
-              originalColumn: mapping.originalColumn ?? null,
-              originalLine: mapping.originalLine ?? null,
-              source: mapping.source ?? null,
-            });
-          },
-          null,
-          SourceMapConsumer.GENERATED_ORDER
-        );
-        return mappings;
-      }
-    );
+    decodedMappings = decodeSourceMapMappings(safeMap);
   } catch (error) {
     throw differentialUncomparable(
       path,
