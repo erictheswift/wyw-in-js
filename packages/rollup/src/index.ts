@@ -4,6 +4,8 @@
  * returns transformed code without template literals and attaches generated source maps
  */
 
+import path from 'path';
+
 import { createFilter } from '@rollup/pluginutils';
 import type { Plugin, PluginContext, ResolvedId } from 'rollup';
 
@@ -56,8 +58,60 @@ type QueuedTransform = {
   promote: () => void;
 };
 
+type AsyncResolve = (
+  what: string,
+  importer: string,
+  stack: string[]
+) => Promise<string | null>;
+
 let rollupGraphScopeId = 0;
 const cssCachePrefix = 'wyw-in-js:css:';
+const nodeModulesPattern = /[\\/]node_modules[\\/]/;
+
+// Rollup ids may carry a `?query`. A `#` stays: it can be part of a real path.
+const toWatchFile = (id: string | null | undefined): string | null => {
+  if (!id || id.startsWith('\0')) return null;
+
+  const [file] = id.split('?', 1);
+  return path.isAbsolute(file) && !nodeModulesPattern.test(file) ? file : null;
+};
+
+/**
+ * Files outside `node_modules` whose edits must re-transform `importer`.
+ * `Result.dependencies` lists the root's own imports by specifier, with the
+ * resolution the transform used in `dependencyResolutions`, and the modules
+ * behind them by absolute path. Specifiers without a recorded resolution go
+ * through the Rollup resolver.
+ */
+const getWatchFiles = async (
+  result: Result,
+  importer: string,
+  resolve: AsyncResolve
+): Promise<string[]> => {
+  const resolutions = new Map(
+    (result.dependencyResolutions ?? []).map(({ resolved, source }) => [
+      source,
+      resolved,
+    ])
+  );
+
+  const files = await Promise.all(
+    (result.dependencies ?? []).map(async (dependency) => {
+      if (path.isAbsolute(dependency)) return toWatchFile(dependency);
+
+      const resolved = resolutions.get(dependency);
+      if (resolved !== undefined) return toWatchFile(resolved);
+
+      try {
+        return toWatchFile(await resolve(dependency, importer, [importer]));
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  return [...new Set(files.filter((file): file is string => file !== null))];
+};
 
 export default function wywInJS({
   cssFilename,
@@ -478,11 +532,17 @@ export default function wywInJS({
             : {}),
         };
 
-        const result = await transform(
-          transformServices,
-          code,
-          createAsyncResolver(getBoundResolve(this))
-        );
+        const asyncResolve = createAsyncResolver(getBoundResolve(this));
+        const result = await transform(transformServices, code, asyncResolve);
+
+        // Evaluated imports are gone from the transformed code, so Rollup
+        // does not know about them. Without a watch file an edit of such a
+        // dependency would keep the cached transform and its stale CSS.
+        // Guarded like `this.load`: not every supported host provides it.
+        if (typeof this.addWatchFile === 'function') {
+          const watchFiles = await getWatchFiles(result, id, asyncResolve);
+          watchFiles.forEach((file) => this.addWatchFile(file));
+        }
 
         // `cssText` distinguishes three outcomes:
         // - undefined: the file was not transformed, Rollup keeps its code;
