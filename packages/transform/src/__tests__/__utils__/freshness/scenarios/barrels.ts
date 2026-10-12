@@ -18,6 +18,55 @@ const barrelRecovery = (
   intended: { reset: 'none', ...intended },
 });
 
+const accentOverPalette = [
+  "import { base } from './palette';",
+  '',
+  'export const accent = (() => `${base}-accent`)();',
+  '',
+].join('\n');
+
+/**
+ * A styled module that re-exports `accent` from theme.ts with `reexport` and
+ * uses it in its own style: a barrel for the re-exported name only.
+ */
+const reexportingStyled = (reexport: string): string =>
+  styled(
+    ["import { accent } from './theme';", reexport],
+    'background: ${accent};'
+  );
+
+/** page.ts reads a value and the class of A.ts in its own style. */
+const pageOverA = (value: string): string =>
+  styled(
+    [`import { ${value}, style as a } from './A';`],
+    `color: \${${value}}; & .\${a} { color: \${${value}}; }`
+  );
+
+const reexportProject = (reexport: string, value = 'accent') => ({
+  'page.ts': pageOverA(value),
+  'A.ts': reexportingStyled(reexport),
+  'theme.ts': accentOverPalette,
+  'palette.ts': runtimeValue('base', 'blue'),
+});
+
+const pageCss = (color: string): string[] => [
+  `color:${color}-accent;`,
+  `color:${color}-accent;`,
+];
+
+const moduleCss = (color: string): string[] => [`background:${color}-accent;`];
+
+const rootCopyNarrowed = (description: string): KnownBug => ({
+  impact: 'performance',
+  description:
+    `${description} A.ts готовится заново, хотя ничего не менялось: eval ` +
+    'публикует вычисленную копию A.ts с экспортом accent, который в той же ' +
+    'eval-сессии запрашивал page.ts, и evaluatedOnly копии ' +
+    'перезаписывается списком сериализованных экспортов без __wywPreval. ' +
+    'Следующий transform A.ts такую копию переиспользовать не может.',
+  intended: fromCache,
+});
+
 /** Barrel rewrites: named re-exports, `export *`, static re-export chains. */
 export const barrelScenarios: FreshnessScenario[] = [
   {
@@ -341,6 +390,186 @@ export const barrelScenarios: FreshnessScenario[] = [
           prepared: ['root.ts'],
           evaluated: [],
         },
+      },
+    ],
+  },
+  {
+    id: 'reexported-value-used-importer-first',
+    title:
+      'модуль реэкспортирует значение и сам его использует; импортёр первым',
+    refs: [],
+    files: reexportProject("export { accent } from './theme';"),
+    steps: [
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        note: 'eval page.ts загружает A.ts как barrel: прокси только для accent',
+        expect: {
+          css: { 'page.ts': pageCss('blue') },
+          prepared: ['page.ts', 'palette.ts', 'theme.ts'],
+          evaluated: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }],
+        note: 'прокси не подменяет A.ts в его собственном eval',
+        expect: {
+          css: { 'A.ts': moduleCss('blue') },
+          prepared: ['A.ts'],
+          evaluated: ['A.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }, { file: 'A.ts' }],
+        expect: {
+          css: { 'page.ts': pageCss('blue'), 'A.ts': moduleCss('blue') },
+          prepared: ['A.ts'],
+          evaluated: [],
+        },
+        knownBug: rootCopyNarrowed(
+          'Холостой transform сразу после холодной сборки.'
+        ),
+      },
+      { do: 'write', files: { 'palette.ts': runtimeValue('base', 'red') } },
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        expect: {
+          css: { 'page.ts': pageCss('red') },
+          prepared: ['page.ts', 'palette.ts', 'theme.ts'],
+          evaluated: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }],
+        expect: {
+          css: { 'A.ts': moduleCss('red') },
+          prepared: ['A.ts'],
+          evaluated: ['A.ts'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'reexported-value-renamed-importer-first',
+    title: 'то же с переименованием при реэкспорте',
+    refs: [],
+    files: reexportProject("export { accent as tone } from './theme';", 'tone'),
+    steps: [
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        expect: {
+          css: { 'page.ts': pageCss('blue') },
+          prepared: ['page.ts', 'palette.ts', 'theme.ts'],
+          evaluated: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }],
+        expect: {
+          css: { 'A.ts': moduleCss('blue') },
+          prepared: ['A.ts'],
+          evaluated: ['A.ts'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'reexported-value-used-concurrently',
+    title: 'то же, импортёр и модуль параллельно',
+    refs: [],
+    files: reexportProject("export { accent } from './theme';"),
+    steps: [
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }, { file: 'A.ts' }],
+        expect: {
+          css: { 'page.ts': pageCss('blue'), 'A.ts': moduleCss('blue') },
+          prepared: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+          evaluated: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+        },
+      },
+      { do: 'write', files: { 'palette.ts': runtimeValue('base', 'red') } },
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }, { file: 'A.ts' }],
+        expect: {
+          css: { 'page.ts': pageCss('red'), 'A.ts': moduleCss('red') },
+          prepared: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+          evaluated: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'reexported-star-value-used-importer-first',
+    title: 'то же через `export *`, импортёр первым',
+    refs: [],
+    files: reexportProject("export * from './theme';"),
+    steps: [
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        note: 'за `export *` прокси не строится: A.ts исполняется целиком',
+        expect: {
+          css: { 'page.ts': pageCss('blue') },
+          prepared: ['page.ts', 'palette.ts', 'theme.ts'],
+          evaluated: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }],
+        expect: {
+          css: { 'A.ts': moduleCss('blue') },
+          prepared: ['A.ts'],
+          evaluated: [],
+        },
+      },
+    ],
+  },
+  {
+    id: 'reexported-value-used-module-first',
+    title: 'модуль реэкспортирует значение и сам его использует; модуль первым',
+    refs: [],
+    files: reexportProject("export { accent } from './theme';"),
+    steps: [
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }],
+        expect: {
+          css: { 'A.ts': moduleCss('blue') },
+          prepared: ['A.ts', 'palette.ts', 'theme.ts'],
+          evaluated: ['A.ts', 'palette.ts', 'theme.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        expect: {
+          css: { 'page.ts': pageCss('blue') },
+          prepared: ['page.ts'],
+          evaluated: ['A.ts', 'page.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }],
+        note: 'повторный transform A.ts в той же eval-сессии, что и page.ts',
+        expect: {
+          css: { 'A.ts': moduleCss('blue') },
+          prepared: ['A.ts'],
+          evaluated: ['A.ts'],
+        },
+        knownBug: rootCopyNarrowed(
+          'Холостой transform. Кроме того, eval page.ts загрузил A.ts как ' +
+            'прокси, и код A.ts снова отправляется в eval-раннер.'
+        ),
       },
     ],
   },

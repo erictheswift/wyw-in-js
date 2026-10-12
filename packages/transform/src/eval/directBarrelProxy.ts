@@ -104,9 +104,13 @@ export const buildDirectBarrelProxy = (
     return null;
   }
 
+  // The proxy runs none of the module's own code. A module with exports of
+  // its own can have a `__wywPreval` and side effects, so its proxy covers
+  // only the requested names; otherwise a later evaluation of that module as
+  // a root would reuse the proxy and get no `__wywPreval`.
   return {
     code: `${lines.join('\n')}\n`,
     imports,
-    only,
+    only: analyzed.complete ? only : requested,
   };
 };
