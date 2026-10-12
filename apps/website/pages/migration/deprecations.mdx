@@ -1,0 +1,53 @@
+# Deprecated in 2.6, removed in 3.0
+
+The APIs on this page are deprecated in 2.6. They keep working in 2.x and are removed in 3.0, unless a row says
+otherwise. TypeScript marks them with `@deprecated`, so editors show them struck through.
+
+Bundler plugins, the CLI and configs that only use documented options are not affected. The list matters if you call
+`@wyw-in-js/transform` directly or build your own integration.
+
+## Legacy in-process evaluator
+
+`transform()` evaluates modules in a separate runner process and never uses the legacy evaluator.
+
+| Deprecated                                                   | Replacement                                                                                                                 |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `Module`, `DefaultModuleImplementation`                      | `transform()`. Constructing `Module` emits a one-time `DeprecationWarning` with the code `WYW_MODULE_DEPRECATED`.           |
+| `UnprocessedEntrypointError`, `isUnprocessedEntrypointError` | None. Only `Module` throws this error.                                                                                      |
+| `features.useWeakRefInEval`                                  | None. The flag only affects `Module` and has no effect on `transform()`. In 3.0 the key is still accepted and does nothing. |
+
+## Replacing stages of `transform()`
+
+The stages of the action runner are internal and can change in any release.
+
+| Deprecated                                     | Replacement                                                                                     |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| The `customHandlers` argument of `transform()` | To observe stages, pass an `eventEmitter`. Replacing a stage is not supported.                  |
+| `baseHandlers`                                 | None. It exists only for `customHandlers`.                                                      |
+| `asyncResolveImports`                          | None. `transform()` always uses its own handler with the resolver passed as its third argument. |
+| `syncResolveImports`                           | None. `transform()` does not use the synchronous action runner.                                 |
+
+## Fields of the `transform()` input
+
+| Deprecated                   | Replacement                                                                     |
+| ---------------------------- | ------------------------------------------------------------------------------- |
+| `asyncResolve`               | Pass the resolver as the third argument of `transform()`. The field is ignored. |
+| `evalCacheKey`, `evalBroker` | None. `transform()` ignores these fields and sets them itself.                  |
+| `loadAndParseFn`             | None yet.                                                                       |
+
+## `TransformCacheCollection`
+
+| Deprecated                                      | Replacement                                   |
+| ----------------------------------------------- | --------------------------------------------- |
+| `beginUnknownGraphRecovery()`                   | None. `transform()` starts recoveries itself. |
+| `beginSupersedeStormRecovery(error, filename?)` | None. `transform()` starts recoveries itself. |
+| `createGraphTraversalToken()` without arguments | None.                                         |
+
+## Internal helpers and types
+
+These exports are internals of the transform pipeline.
+
+| Deprecated                                                                                                                                                                                                                      | Replacement                       |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `Services`                                                                                                                                                                                                                      | `Parameters<typeof transform>[0]` |
+| `Entrypoint`, `EvaluatedEntrypoint`, `IEvaluatedEntrypoint`, `ParentEntrypoint`, `ITransformFileResult`, `parseFile`, `LoadAndParseFn`, `prepareCode`, `withDefaultServices`, `isNode`, `getVisitorKeys`, `VisitorKeys`, `peek` | None.                             |

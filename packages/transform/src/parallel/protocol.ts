@@ -9,6 +9,9 @@ import type { Preprocessor, Result } from '../types';
  * thread boundary, so every value must be structured-cloneable: function
  * options have to come from a wyw-in-js config file, which workers load
  * themselves.
+ *
+ * @experimental Intended for wyw-in-js integrations; may change in a minor
+ * release.
  */
 export type TransformWorkerScopeConfig = {
   /** Stable key for the bundler resolver; it is part of the eval cache key. */

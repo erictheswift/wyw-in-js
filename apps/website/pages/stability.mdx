@@ -14,6 +14,11 @@ WyW-in-JS follows SemVer for the published `@wyw-in-js/*` packages.
 The pre-`1.0.0` (`0.x`) line existed mostly because the project evolved rapidly, despite being used in real production
 setups.
 
+### Deprecations
+
+A `minor` release can deprecate an API. A deprecated API keeps working until the next major release, which removes it.
+See [Deprecated in 2.6](/migration/deprecations) for the APIs that `3.0.0` removes and their replacements.
+
 ## Why “stable” is non-trivial here
 
 WyW-in-JS does a lot of work at **build time**, including static analysis and evaluating parts of JavaScript to compute

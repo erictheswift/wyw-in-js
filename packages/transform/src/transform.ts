@@ -14,6 +14,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 import type { PartialOptions } from './transform/helpers/loadWywOptions';
 import { loadWywOptions } from './transform/helpers/loadWywOptions';
+import { warnCustomHandlersDeprecated } from './transform/helpers/onceWarnings';
 import {
   CacheKeySaltBusyError,
   TransformCacheCollection,
@@ -44,10 +45,29 @@ import {
   runWithPipelineTelemetry,
 } from './debug/pipelineTelemetry';
 
-type PartialServices = Partial<Omit<Services, 'cacheEpoch' | 'options'>> & {
+type DeprecatedServices =
+  | 'asyncResolve'
+  | 'evalBroker'
+  | 'evalCacheKey'
+  | 'loadAndParseFn';
+
+type PartialServices = Partial<
+  Omit<Services, 'cacheEpoch' | 'options' | DeprecatedServices>
+> & {
   options: Omit<Services['options'], 'pluginOptions'> & {
     pluginOptions?: PartialOptions;
   };
+  /**
+   * @deprecated Ignored: pass the resolver as the third argument of
+   * `transform()`. Will be removed in 3.0.
+   */
+  asyncResolve?: Services['asyncResolve'];
+  /** @deprecated Ignored: `transform()` owns the eval broker. Will be removed in 3.0. */
+  evalBroker?: Services['evalBroker'];
+  /** @deprecated Ignored: `transform()` computes the key. Will be removed in 3.0. */
+  evalCacheKey?: Services['evalCacheKey'];
+  /** @deprecated Custom loaders will be removed in 3.0. */
+  loadAndParseFn?: Services['loadAndParseFn'];
 };
 
 type AllHandlers<TMode extends 'async' | 'sync'> = Handlers<TMode>;
@@ -405,6 +425,10 @@ export function transform(
   asyncResolve: TransformAsyncResolve,
   customHandlers: Partial<AllHandlers<'sync'>> = {}
 ): Promise<Result> {
+  if (Object.keys(customHandlers).length > 0) {
+    warnCustomHandlersDeprecated();
+  }
+
   const { eventEmitter } = partialServices;
   if (!eventEmitter || !hasPipelineTelemetryReporter(eventEmitter)) {
     if (isPipelineTelemetryActive()) {

@@ -46,6 +46,9 @@ const findNonTransferableScopeOption = ({
  * Shared adapter glue for running transforms in worker threads: owns the pool
  * and its scopes, and decides which scopes have to stay on the calling thread.
  * Returns null when parallel transforms are disabled.
+ *
+ * @experimental Intended for wyw-in-js integrations; may change in a minor
+ * release.
  */
 export const createParallelTransforms = ({
   onFallback,

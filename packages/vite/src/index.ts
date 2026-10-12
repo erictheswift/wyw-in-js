@@ -54,6 +54,7 @@ import type {
   OutputBundleLike,
   RollupOutputLike,
 } from './cssAssets.js';
+import { getWatchFiles } from './watchFiles.js';
 
 const {
   createParallelTransforms,
@@ -327,11 +328,9 @@ export default function wywInJS({
   const clientCache = new TransformCacheCollection();
   const ssrCache = new TransformCacheCollection();
   const caches = new Set<TransformCacheCollectionType>([clientCache, ssrCache]);
-  let evalBrokersDisposed = false;
-
+  // Idempotent; the next evaluation starts a new eval runner. `build --watch`
+  // disposes after every build, so no runner outlives the watcher.
   const disposeEvalBrokers = () => {
-    if (evalBrokersDisposed) return;
-    evalBrokersDisposed = true;
     for (const cache of caches) {
       disposeEvalBroker(cache);
     }
@@ -850,6 +849,23 @@ export default function wywInJS({
             source: relativeId,
           })
         );
+      }
+
+      // `vite build --watch`: evaluated imports are gone from the transformed
+      // code, so Rollup does not know about them. Without a watch file an edit
+      // of such a dependency would keep the cached transform and its stale
+      // CSS. The dev server tracks them in `handleHotUpdate` instead: there,
+      // `addWatchFile` would add them to the module graph.
+      if (
+        config.command === 'build' &&
+        typeof this.addWatchFile === 'function'
+      ) {
+        const watchFiles = await getWatchFiles(
+          result,
+          async (dependency) =>
+            (await this.resolve(dependency, url, { isEntry: false }))?.id
+        );
+        watchFiles.forEach((file) => this.addWatchFile(file));
       }
 
       let { cssText, dependencies } = result;

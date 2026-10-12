@@ -15,11 +15,12 @@ We runs the worlflow action with `actionRunner` and `actionsCache` for better pe
 ```
 workflow
 ├── processEntrypoint
-│   ├── explodeReexports
-│   │   ├── resolveImports
-│   │   └── getExports
-│   │       └── resolveImports
 │   └── transform
+│       ├── resolveImports
+│       ├── getExports
+│       │   └── resolveImports
+│       └── processImports
+│           └── processEntrypoint
 ├── evalFile
 ├── collect
 └── extract
@@ -112,32 +113,9 @@ const c2 = 'wxyz';
 
 The first stage of processing an entrypoint. This stage is responsible for:
 
-- scheduling the `explodeReexports` action
 - scheduling the `transform` action
 - rescheduling itself if the entrypoint is superseded
-
-## ExplodeReexports Action
-
-Replaces wildcard reexports with named reexports. Recursively emits `getExports` for each reexported module, and replaces wildcard with resolved named.
-
-### Input
-
-```js
-export * from './foo'; /* wildcard reexports */
-```
-
-```js
-// ./foo.js
-export const foo1 = 'foo1';
-export const foo2 = 'foo2';
-export const foo3 = 'foo3';
-```
-
-### Output
-
-```js
-export { foo1, foo2, foo3 } from './foo';
-```
+- waiting for a concurrent request that is already processing the entrypoint
 
 ## ResolveImports Action
 
@@ -145,7 +123,9 @@ Resolves specified imports with a provided resolver.
 
 ## GetExports Action
 
-Collects exports and re-exports. Recursively emits `getExports` for each reexported module.
+Collects exports and re-exports. Recursively emits `getExports` for each reexported module. The `transform` action uses
+it to rewrite imports from barrel files (modules that re-export other modules) into imports from the modules that
+declare the bindings.
 
 ```js
 // index.js

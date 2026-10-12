@@ -76,6 +76,28 @@ const getOriginalElementValue = (
   return element ? element[ORIGINAL_VALUE_KEY] ?? element.value : '';
 };
 
+// Elements link to their `parent` and `root`, so a plain JSON.stringify of a
+// child list is cyclic. The description skips those links and marks repeats.
+const describeElementValue = (value: unknown): string => {
+  const seen = new WeakSet<object>();
+  return JSON.stringify(
+    value,
+    (key, nested: unknown) => {
+      if (key === 'parent' || key === 'root') {
+        return undefined;
+      }
+      if (typeof nested === 'object' && nested !== null) {
+        if (seen.has(nested)) {
+          return '[Circular]';
+        }
+        seen.add(nested);
+      }
+      return nested;
+    },
+    2
+  );
+};
+
 // Stylis 4 builds declarations with string `props` and `children`, rulesets
 // and at-rules with array `props`, and its prefixer copies keep those shapes.
 // Anything else means the element contract changed. That fails in every
@@ -86,10 +108,8 @@ function unexpectedElementShape(
   type: string
 ): never {
   throw new Error(
-    `"element.${key}" has type "${type}" (${JSON.stringify(
-      value,
-      null,
-      2
+    `"element.${key}" has type "${type}" (${describeElementValue(
+      value
     )}), it's not expected. Please report a bug if it happens.`
   );
 }
@@ -254,6 +274,22 @@ export const stylisGlobalPlugin: Middleware = (element) => {
   });
 };
 
+/**
+ * Rewrites relative `url()` paths in CSS taken from `sourceFilename`, so they
+ * point at the same assets from `outputFilename`.
+ */
+export function rewriteRelativeUrls(
+  css: string,
+  sourceFilename: string,
+  outputFilename: string
+): string {
+  return css.replace(
+    RELATIVE_URL_REGEXP,
+    (_match, p1, _p2, p3, p4) =>
+      p1 + transformUrl(p3, outputFilename, sourceFilename) + p4
+  );
+}
+
 export function createStylisUrlReplacePlugin(
   filename: string,
   outputFilename: string | undefined
@@ -266,11 +302,7 @@ export function createStylisUrlReplacePlugin(
       // elements that already have `return`, so setting it here would drop
       // vendor prefixes and the display normalization.
       const replaceUrls = (css: string) =>
-        css.replace(
-          RELATIVE_URL_REGEXP,
-          (_match, p1, _p2, p3, p4) =>
-            p1 + transformUrl(p3, outputFilename, filename) + p4
-        );
+        rewriteRelativeUrls(css, filename, outputFilename);
 
       Object.assign(element, {
         children:

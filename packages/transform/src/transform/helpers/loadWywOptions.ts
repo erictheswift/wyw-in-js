@@ -4,15 +4,20 @@ import path from 'path';
 
 import { cosmiconfigSync } from 'cosmiconfig';
 
+import { mergeOxcResolverAlias } from '@wyw-in-js/shared';
 import type {
   EvalOptionsV2,
   FeatureFlags,
   ImportLoaders,
+  NativeResolverAlias,
+  OxcOptions,
   StrictOptions,
 } from '@wyw-in-js/shared';
 
 import { shaker } from '../../shaker';
 import { DEFAULT_EVAL_OPTIONS } from '../../utils/evalOptions';
+import { omitUndefined } from '../../utils/omitUndefined';
+import { warnAboutLoadedOptions } from './onceWarnings';
 import type { PluginOptions } from '../../types';
 import { DEFAULT_EVAL_STRATEGY } from '../../utils/evalStrategy';
 
@@ -61,6 +66,30 @@ const resolveConfigFilePath = (configFile: string): string =>
   path.isAbsolute(configFile)
     ? configFile
     : path.resolve(process.cwd(), configFile);
+
+// Bundler integrations add their aliases to the plugin oxcOptions. The
+// oxcOptions of the config file still replace the plugin ones, except for
+// those aliases: they stay, under the aliases set in the config file.
+const withPluginResolverAlias = (
+  configOxcOptions: OxcOptions,
+  pluginOxcOptions: OxcOptions
+): OxcOptions => {
+  const alias = pluginOxcOptions.resolver?.alias;
+  if (
+    !configOxcOptions ||
+    typeof configOxcOptions !== 'object' ||
+    !alias ||
+    typeof alias !== 'object' ||
+    Array.isArray(alias)
+  ) {
+    return configOxcOptions;
+  }
+
+  return (
+    mergeOxcResolverAlias(configOxcOptions, alias as NativeResolverAlias) ??
+    configOxcOptions
+  );
+};
 
 const normalizeLoadedConfig = (loadedConfig: unknown): Partial<StrictOptions> =>
   (loadedConfig && typeof loadedConfig === 'object' && 'default' in loadedConfig
@@ -193,6 +222,11 @@ export function loadWywOptions(
   const configImportLoaders = config.importLoaders;
   const configFeatures = config.features;
   const configEval = config.eval;
+  // An option set to `undefined` is not set: it keeps the default, and an
+  // option of the plugin keeps the value from the config file. Feature flags
+  // still merge as given.
+  const definedConfig = omitUndefined(config);
+  const definedRest = omitUndefined(rest);
 
   const options: StrictOptions = {
     displayName: false,
@@ -222,18 +256,21 @@ export function loadWywOptions(
       },
     ],
     highPriorityPlugins: ['module-resolver'],
-    oxcOptions,
-    ...config,
-    ...rest,
+    ...definedConfig,
+    ...definedRest,
+    oxcOptions:
+      definedConfig.oxcOptions === undefined
+        ? oxcOptions
+        : withPluginResolverAlias(definedConfig.oxcOptions, oxcOptions),
     eval: {
       ...defaultEval,
-      ...(configEval ?? {}),
-      ...(rest.eval ?? {}),
+      ...omitUndefined(configEval),
+      ...omitUndefined(rest.eval),
     },
     importLoaders: {
       ...defaultImportLoaders,
-      ...(configImportLoaders ?? {}),
-      ...(overridesImportLoaders ?? {}),
+      ...omitUndefined(configImportLoaders),
+      ...omitUndefined(overridesImportLoaders),
     },
     features: {
       ...defaultFeatures,
@@ -266,6 +303,12 @@ export function loadWywOptions(
       `[wyw-in-js] Unsupported eval.errors "${evalErrors}". Use "strict" or "loose".`
     );
   }
+
+  warnAboutLoadedOptions({
+    configFileOptions: definedConfig,
+    options,
+    pluginRules: rules,
+  });
 
   cache.set(overrides, options);
 
