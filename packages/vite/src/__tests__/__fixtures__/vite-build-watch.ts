@@ -1,5 +1,6 @@
 // Runs `vite build --watch` for src/index.js of the working directory with the
-// wyw-in-js plugin, applies the given file edits one per rebuild and prints
+// wyw-in-js plugin (and the given plugin options), applies the given file
+// edits one per rebuild and prints
 // the emitted CSS of every build. The build-watch test runs it in its own
 // process: `jest.mock` in bun is process-wide, so the vite and transform mocks
 // of other test files in this package would otherwise reach the plugin.
@@ -24,6 +25,7 @@ const sleep = (ms: number) =>
 
 const run = async () => {
   const edits: Edit[] = JSON.parse(process.argv[2] ?? '[]');
+  const options = JSON.parse(process.argv[3] ?? '{}');
   const root = process.cwd();
   const builds: string[] = [];
   let css = '';
@@ -47,7 +49,10 @@ const run = async () => {
     configFile: false,
     logLevel: 'silent',
     plugins: [
-      wywInJS({ configFile: path.join(root, 'wyw-in-js.config.cjs') }),
+      wywInJS({
+        configFile: path.join(root, 'wyw-in-js.config.cjs'),
+        ...options,
+      }),
       captureCss,
     ],
     build: {

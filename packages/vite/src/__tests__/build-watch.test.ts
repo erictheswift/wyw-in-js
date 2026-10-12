@@ -84,11 +84,12 @@ const createProject = (): string => {
 
 const runBuildWatch = (
   root: string,
-  edits: { content: string; file: string }[]
+  edits: { content: string; file: string }[],
+  options: Record<string, unknown>
 ): WatchReport => {
   const result = spawnSync(
     process.execPath,
-    [viteBuildWatchPath, JSON.stringify(edits)],
+    [viteBuildWatchPath, JSON.stringify(edits), JSON.stringify(options)],
     { cwd: root, encoding: 'utf8', timeout: 60_000 }
   );
 
@@ -110,17 +111,28 @@ describe('vite build --watch', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('re-transforms the importer when an evaluated dependency changes', () => {
-    const report = runBuildWatch(root, [
-      { file: 'src/theme.js', content: themeSource('red') },
-      { file: 'src/palette.js', content: paletteSource('dark') },
-    ]);
+  it.each([
+    { name: 'on the main thread', options: {} },
+    { name: 'in worker threads', options: { parallel: 1 } },
+  ])(
+    're-transforms the importer when an evaluated dependency changes $name',
+    ({ options }) => {
+      const report = runBuildWatch(
+        root,
+        [
+          { file: 'src/theme.js', content: themeSource('red') },
+          { file: 'src/palette.js', content: paletteSource('dark') },
+        ],
+        options
+      );
 
-    expect(report.timedOut).toBe(false);
-    expect(report.builds).toEqual([
-      expect.stringContaining('color:blue-light;'),
-      expect.stringContaining('color:red-light;'),
-      expect.stringContaining('color:red-dark;'),
-    ]);
-  }, 60_000);
+      expect(report.timedOut).toBe(false);
+      expect(report.builds).toEqual([
+        expect.stringContaining('color:blue-light;'),
+        expect.stringContaining('color:red-light;'),
+        expect.stringContaining('color:red-dark;'),
+      ]);
+    },
+    60_000
+  );
 });
