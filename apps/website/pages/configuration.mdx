@@ -46,6 +46,26 @@ module.exports = {
   behavior to always evaluating build-time values. Use `static` as a strict validation mode when any evaluator fallback
   should fail the build.
 
+  **`process.env` in `hybrid` and `static`.** Static resolution does not read the environment of the build. A direct
+  `process.env.NAME` or `process.env['NAME']` read counts as `undefined` when it is:
+
+  - the operand of `typeof`;
+  - the left operand of `??`, `||` or `&&`;
+  - an operand of a comparison such as `===` or `!==`.
+
+  So `${process.env.THEME ?? 'light'}` becomes `light`, and `${process.env.THEME === 'dark' ? a : b}` becomes `b`,
+  whatever `THEME` is set to during the build. The same applies to a function-local variable initialized from such a
+  read.
+
+  Any other use of `process.env` cannot be resolved statically: the value itself (`${process.env.THEME}`), a condition
+  (`process.env.THEME ? a : b`), a parenthesized read, a read through an alias such as `const env = process.env`, or a
+  value passed to a function. `hybrid` computes such values with the build-time evaluator, which sees the real
+  `process.env` of the build, and `static` fails the build. `execute` always uses the real `process.env`.
+
+  Because a small change to an expression can switch it from one rule to the other, do not rely on `process.env` in
+  interpolations. If a style has to depend on the build environment, read the variable in the config file and pass the
+  value explicitly, for example with [`staticBindings`](#staticbindings) for the module that exports it.
+
   `eval.runtime` selects the runtime used by the build-time evaluator. The current runtime is `nodejs`.
 
   `eval.errors` controls evaluator fallback errors:
@@ -539,7 +559,7 @@ module.exports = {
 
   A map of feature flags to enable/disable. See [Feature Flags](/feature-flags) for more information.
 
-- `staticBindings: Record<string, Record<string, unknown>>`
+- <a id="staticbindings"></a> `staticBindings: Record<string, Record<string, unknown>>`
 
   A per-source map of statically-known imported values used by `eval.strategy: "hybrid"` and `eval.strategy: "static"`.
   These bindings are one of the inputs to v2 static-first value resolution. Keys are either the import source as written,
