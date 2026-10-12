@@ -42,6 +42,9 @@ jobs:
       - name: Build
         run: bun run build
 
+      - name: Check published types
+        run: bun run check:published-types
+
       - name: Lint (ESLint, Prettier for e2e)
         run: bun run lint
 
