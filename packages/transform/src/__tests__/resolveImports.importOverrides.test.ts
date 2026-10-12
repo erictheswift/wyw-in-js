@@ -8,7 +8,7 @@ import { logger } from '@wyw-in-js/shared';
 import { TransformCacheCollection } from '../cache';
 import { Entrypoint } from '../transform/Entrypoint';
 import type { LoadAndParseFn } from '../transform/Entrypoint.types';
-import { syncResolveImports } from '../transform/generators/resolveImports';
+import { asyncResolveImports } from '../transform/generators/resolveImports';
 import type { IResolveImportsAction, Services } from '../transform/types';
 import { EventEmitter } from '../utils/EventEmitter';
 
@@ -63,8 +63,20 @@ const createServices = ({
   };
 };
 
+// The handler transform() installs for the `resolveImports` action.
+const resolveImports = async (
+  action: IResolveImportsAction,
+  resolve: (what: string) => string
+) => {
+  const result = await asyncResolveImports
+    .call(action, async (what) => resolve(what))
+    .next();
+
+  return result.value;
+};
+
 describe('resolveImports: importOverrides', () => {
-  it('applies file-key overrides based on resolved path', () => {
+  it('applies file-key overrides based on resolved path', async () => {
     const root = '/project';
     const pluginOptions = createPluginOptions({
       './src/foo.js': { noShake: true },
@@ -90,7 +102,7 @@ describe('resolveImports: importOverrides', () => {
       services,
     } as IResolveImportsAction;
 
-    const depsA = syncResolveImports.call(actionA, resolve).next().value;
+    const depsA = await resolveImports(actionA, resolve);
     expect(depsA).toEqual([
       {
         source: './foo',
@@ -111,7 +123,7 @@ describe('resolveImports: importOverrides', () => {
       services,
     } as IResolveImportsAction;
 
-    const depsB = syncResolveImports.call(actionB, resolve).next().value;
+    const depsB = await resolveImports(actionB, resolve);
     expect(depsB).toEqual([
       {
         source: '../src/foo.js',
@@ -121,7 +133,7 @@ describe('resolveImports: importOverrides', () => {
     ]);
   });
 
-  it('supports glob patterns for file-key overrides', () => {
+  it('supports glob patterns for file-key overrides', async () => {
     const root = '/project';
     const pluginOptions = createPluginOptions({
       './src/*.js': { noShake: true },
@@ -147,7 +159,7 @@ describe('resolveImports: importOverrides', () => {
       services,
     } as IResolveImportsAction;
 
-    const deps = syncResolveImports.call(action, resolve).next().value;
+    const deps = await resolveImports(action, resolve);
     expect(deps).toEqual([
       {
         source: './foo',
@@ -157,7 +169,7 @@ describe('resolveImports: importOverrides', () => {
     ]);
   });
 
-  it('reuses pre-resolved file imports and still applies file-key noShake overrides', () => {
+  it('reuses pre-resolved file imports and still applies file-key noShake overrides', async () => {
     const root = '/project';
     const pluginOptions = createPluginOptions({
       './src/foo.js': { noShake: true },
@@ -194,7 +206,7 @@ describe('resolveImports: importOverrides', () => {
       services,
     } as IResolveImportsAction;
 
-    const deps = syncResolveImports.call(action, resolve).next().value;
+    const deps = await resolveImports(action, resolve);
     expect(deps).toEqual([
       {
         source: '/project/src/foo.js',
@@ -205,7 +217,7 @@ describe('resolveImports: importOverrides', () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  it('reuses pre-resolved file imports and still applies file-key mock overrides', () => {
+  it('reuses pre-resolved file imports and still applies file-key mock overrides', async () => {
     const root = __dirname;
     const sourceFile = path.join(root, 'src', 'foo.js');
     const mockSpecifier = './__fixtures__/sample-script.js';
@@ -245,7 +257,7 @@ describe('resolveImports: importOverrides', () => {
       services,
     } as IResolveImportsAction;
 
-    const deps = syncResolveImports.call(action, resolve).next().value;
+    const deps = await resolveImports(action, resolve);
     expect(deps).toEqual([
       {
         source: sourceFile,
@@ -256,7 +268,7 @@ describe('resolveImports: importOverrides', () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  it('applies package-key overrides by source specifier', () => {
+  it('applies package-key overrides by source specifier', async () => {
     const root = __dirname;
     const mockSpecifier = './__fixtures__/sample-script.js';
 
@@ -284,9 +296,7 @@ describe('resolveImports: importOverrides', () => {
       services,
     } as IResolveImportsAction;
 
-    const deps = syncResolveImports
-      .call(action, () => '/external/react.js')
-      .next().value;
+    const deps = await resolveImports(action, () => '/external/react.js');
 
     expect(deps).toEqual([
       {

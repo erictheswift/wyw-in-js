@@ -4,6 +4,9 @@ import type { TransformWorkerJob, TransformWorkerPool } from './pool';
 /**
  * Transforms of one adapter scope. Every worker keeps a separate cache for
  * each scope, so the methods below apply to all workers.
+ *
+ * @experimental Intended for wyw-in-js integrations; may change in a minor
+ * release.
  */
 export class TransformWorkerScope {
   public constructor(

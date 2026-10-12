@@ -8,10 +8,7 @@ import { asyncActionRunner } from '../transform/actions/actionRunner';
 import { isCacheEpochAbortedError } from '../transform/actions/CacheEpochAbortedError';
 import { baseProcessingHandlers } from '../transform/generators/baseProcessingHandlers';
 import { processEntrypoint } from '../transform/generators/processEntrypoint';
-import {
-  asyncResolveImports,
-  syncResolveImports,
-} from '../transform/generators/resolveImports';
+import { asyncResolveImports } from '../transform/generators/resolveImports';
 import { loadWywOptions } from '../transform/helpers/loadWywOptions';
 import { withDefaultServices } from '../transform/helpers/withDefaultServices';
 import type {
@@ -149,7 +146,9 @@ const runEntrypoint = async (
         },
         processEntrypoint,
         resolveImports(this: IResolveImportsAction) {
-          return syncResolveImports.call(this, resolve);
+          return asyncResolveImports.call(this, async (what, importer) =>
+            resolve(what, importer)
+          );
         },
       };
 

@@ -17,15 +17,19 @@ export const delay = (timeoutMs: number) =>
 
 // Spawns the eval runner the same way the broker does and speaks its
 // newline-delimited JSON protocol directly, so tests can drive one runner
-// process without a broker in between.
-export const createHarness = (cwd: string) => {
+// process without a broker in between. `nodeArgs` go before the runner
+// script, e.g. to preload module hooks.
+export const createHarness = (
+  cwd: string,
+  { nodeArgs = [] }: { nodeArgs?: string[] } = {}
+) => {
   const runnerPath = join(__dirname, '..', '..', 'eval', 'runner.js');
   const nodeBinary = process.execPath.includes('bun')
     ? 'node'
     : process.execPath;
   const child = spawn(
     process.env.WYW_NODE_BINARY || nodeBinary,
-    ['--experimental-vm-modules', runnerPath],
+    [...nodeArgs, '--experimental-vm-modules', runnerPath],
     {
       cwd,
       env: {
