@@ -27,6 +27,13 @@ const sharedWithAccent = (color: string): Record<string, string> => ({
   'tokens.ts': `export const colors = { red: '${color}' };\n`,
 });
 
+/** A styled module whose value export needs the eval runner. */
+const styledWithRuntimeAccent = (color: string): string =>
+  styled(
+    [`export const accent = (() => '${color}')();`],
+    'background: ${accent};'
+  );
+
 /** Concurrent transforms, supersede, the watch loop and shared caches. */
 export const concurrencyScenarios: FreshnessScenario[] = [
   {
@@ -434,6 +441,59 @@ export const concurrencyScenarios: FreshnessScenario[] = [
           css: { 'entry.ts': ['background:crimson-mixed;'] },
           prepared: ['entry.ts'],
           evaluated: ['entry.ts'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'root-after-importer-evaluated-all',
+    title: 'корень после импортёра, который вычислил все его экспорты',
+    refs: ['#427'],
+    files: {
+      'A.ts': styledWithRuntimeAccent('blue'),
+      'page.ts': styled(
+        ["import { accent, style as a } from './A';"],
+        'color: ${accent}; & .${a} { color: ${accent}; }'
+      ),
+    },
+    steps: [
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        note: 'page.ts публикует вычисленную копию A.ts со всеми экспортами',
+        expect: {
+          css: { 'page.ts': ['color:blue;', 'color:blue;'] },
+          prepared: ['A.ts', 'page.ts'],
+          evaluated: ['A.ts', 'page.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }],
+        note: 'корень A.ts переиспользует эту копию, а не готовится заново',
+        expect: {
+          css: { 'A.ts': ['background:blue;'] },
+          prepared: [],
+          evaluated: [],
+        },
+      },
+      { do: 'write', files: { 'A.ts': styledWithRuntimeAccent('red') } },
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        expect: {
+          css: { 'page.ts': ['color:red;', 'color:red;'] },
+          prepared: ['A.ts', 'page.ts'],
+          evaluated: ['A.ts', 'page.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }],
+        expect: {
+          css: { 'A.ts': ['background:red;'] },
+          prepared: [],
+          evaluated: [],
         },
       },
     ],
