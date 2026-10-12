@@ -499,6 +499,60 @@ export const concurrencyScenarios: FreshnessScenario[] = [
     ],
   },
   {
+    id: 'root-and-importer-together-after-dependency-edit',
+    title: 'модуль и его импортёр в одном раунде после правки зависимости',
+    refs: ['#442'],
+    files: {
+      'A.ts': styled(
+        ["import { theme } from './theme';", '', 'export { theme };'],
+        'background: ${theme};'
+      ),
+      'page.ts': styled(
+        ["import { theme, style as a } from './A';"],
+        'color: ${theme}; & .${a} { margin: 0; }'
+      ),
+      'theme.ts': [
+        "import { base } from './palette';",
+        '',
+        'export const theme = (() => `${base}-theme`)();',
+        '',
+      ].join('\n'),
+      'palette.ts': runtimeValue('base', 'blue'),
+    },
+    steps: [
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        expect: {
+          css: { 'page.ts': ['color:blue-theme;', 'margin:0;'] },
+          prepared: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+          evaluated: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }],
+        expect: { css: { 'A.ts': ['background:blue-theme;'] }, ...fromCache },
+      },
+      { do: 'write', files: { 'palette.ts': runtimeValue('base', 'red') } },
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }, { file: 'page.ts' }],
+        note:
+          'проверка свежести page.ts вытесняет новый корень A.ts и ' +
+          'публикует A.ts заново для своего импорта; корень перезапускается',
+        expect: {
+          css: {
+            'A.ts': ['background:red-theme;'],
+            'page.ts': ['color:red-theme;', 'margin:0;'],
+          },
+          prepared: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+          evaluated: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+        },
+      },
+    ],
+  },
+  {
     id: 'invalidation-cursor-api',
     title: 'общий курсор consumeInvalidation: два потребителя одного файла',
     refs: ['#411'],

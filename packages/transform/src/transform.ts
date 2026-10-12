@@ -55,12 +55,29 @@ type AllHandlers<TMode extends 'async' | 'sync'> = Handlers<TMode>;
 const MAX_CACHE_RECOVERY_RETRIES = 3;
 const MAX_TOTAL_CACHE_RECOVERY_RETRIES = 100;
 
-/** The root was widened into a newer generation while a later stage ran. */
+/**
+ * The root moved to a newer generation while a later stage ran: it was
+ * widened, or another entrypoint of the same source took its publication.
+ */
 class RootSupersededError extends AbortError {
   constructor() {
     super('superseded');
   }
 }
+
+/**
+ * Whether another transform evicted or replaced the root's publication and
+ * published the same source again. That entrypoint has no lineage link to the
+ * root, so only its source tells it from a conflicting input for the file.
+ */
+const isRepublished = (entrypoint: Entrypoint, cache: Services['cache']) => {
+  const publication = cache.get('entrypoints', entrypoint.name);
+  return (
+    publication !== undefined &&
+    !entrypoint.isPublishedAs(publication) &&
+    publication.loadedAndParsed?.code === entrypoint.loadedAndParsed.code
+  );
+};
 
 interface ActiveCacheKeySaltLease {
   active: boolean;
@@ -167,7 +184,7 @@ const executeTransformAttempt = async (
     // Only eviction of this root can restart the top-level input. The
     // workflow follows supersede successors, so the evicted entrypoint may be
     // a later generation of the root. Foreign dependency failures and
-    // replacement publications stay fenced.
+    // publications of another source stay fenced.
     if (
       error instanceof EntrypointEvictedError &&
       !entrypoint.isSelfOrSuccessor(error.entrypoint)
@@ -177,10 +194,14 @@ const executeTransformAttempt = async (
     // A concurrent transform can widen the root into a new generation while
     // evaluation runs. The fence of that stage aborts the whole workflow
     // instead of handing it over, so restart the input on the new generation.
+    // Another transform can also evict or replace the root's publication and
+    // publish the same source again. No successor takes over then, so restart
+    // the input on that publication.
     if (
       isAborted(error) &&
       !(error instanceof EntrypointEvictedError) &&
-      entrypoint.supersededWith !== null
+      (entrypoint.supersededWith !== null ||
+        isRepublished(entrypoint, services.cache))
     ) {
       throw new RootSupersededError();
     }
