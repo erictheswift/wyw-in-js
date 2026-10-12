@@ -11,7 +11,7 @@ import { analyzeOxcBarrelFile } from '../transform/oxcBarrelManifest';
 import { EventEmitter } from '../utils/EventEmitter';
 import { emitOxcCommonJS } from '../utils/oxcEmit';
 import { appendOxcWywPreval } from '../utils/oxcPreevalStage';
-import { parseOxcCached } from '../utils/parseOxc';
+import { parseOxcCached, parseOxcProgramCached } from '../utils/parseOxc';
 
 const collectParseTelemetry = async (
   filename: string,
@@ -57,7 +57,7 @@ describe('single cached parse entry', () => {
       ],
     });
     expect(
-      (parseFile(undefined, filename, code) as Program).body.map(
+      parseOxcProgramCached(filename, code, 'module').body.map(
         ({ type }) => type
       )
     ).toEqual([
@@ -99,6 +99,10 @@ describe('single cached parse entry', () => {
 
     const parse = await collectParseTelemetry(filename, () => {
       const owned = parseFile(undefined, filename, code) as Program;
+      expect(owned.body.map(({ type }) => type)).toEqual([
+        'ExportNamedDeclaration',
+        'ExportNamedDeclaration',
+      ]);
       expect(owned).not.toBe(cachedBefore);
       expect(parseFile(undefined, filename, code)).not.toBe(owned);
       owned.body.splice(0, owned.body.length);

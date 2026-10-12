@@ -15,7 +15,6 @@ import dedent from 'dedent';
 import { loadWywOptions } from '../transform/helpers/loadWywOptions';
 import { shaker } from '../shaker';
 import { Entrypoint } from '../transform/Entrypoint';
-import { parseFile } from '../transform/Entrypoint.helpers';
 import { prepareCode } from '../transform/generators/transform';
 import { withDefaultServices } from '../transform/helpers/withDefaultServices';
 import { EventEmitter } from '../utils/EventEmitter';
@@ -80,14 +79,11 @@ describe('prepareCode', () => {
       if (entrypoint.ignored) {
         throw new Error('Ignored');
       }
-      const ast = parseFile(babel, inputFilePath, sourceCode, {
-        root,
-      });
 
       const [transformedCode, imports, metadata] = prepareCode(
         services,
         entrypoint,
-        ast
+        null
       );
 
       expect(transformedCode).toMatchSnapshot('code');

@@ -40,10 +40,9 @@ import {
 } from '../debug/pipelineTelemetry.state';
 import type { CodeMeasurementCache } from '../debug/pipelineTelemetry.types';
 import { transform } from '../transform';
-import { parseFile } from '../transform/Entrypoint.helpers';
 import { removeUnusedAfterReplacement } from '../utils/applyOxcProcessors/cleanup-after-replacement';
 import { ContentHashMemo } from '../utils/contentHash';
-import { parseOxcCached } from '../utils/parseOxc';
+import { parseOxcCached, parseOxcProgramFresh } from '../utils/parseOxc';
 
 const createEmitter = () =>
   new EventEmitter(
@@ -123,7 +122,7 @@ describe('pipeline telemetry boundary', () => {
             });
             expect(cache.invalidateIfChanged(filename, content)).toBe(false);
           });
-          parseFile(undefined, '/project/digest.ts', code);
+          parseOxcProgramFresh('/project/digest.ts', code, 'module');
         }
       );
     } finally {
@@ -581,7 +580,7 @@ describe('pipeline telemetry boundary', () => {
       () => ({ filename: '/project/a.ts' }),
       async () => {
         recordPipelineCacheRequest('entrypoints', 'get', true);
-        parseFile(undefined, '/project/a.ts', firstCode);
+        parseOxcCached('/project/a.ts', firstCode, 'module');
         releaseSecond();
         await firstBarrier;
         recordPipelineCacheRequest('entrypoints', 'get', false);
@@ -593,7 +592,7 @@ describe('pipeline telemetry boundary', () => {
       async () => {
         await secondBarrier;
         recordPipelineCacheRequest('exports', 'has', false);
-        parseFile(undefined, '/project/b.ts', secondCode);
+        parseOxcCached('/project/b.ts', secondCode, 'module');
         releaseFirst();
       }
     );
@@ -649,7 +648,7 @@ describe('pipeline telemetry boundary', () => {
         parseOxcCached(plainFilename, plainCode, 'module');
         parseOxcCached(jsxFilename, jsxCode, 'unambiguous');
         parseOxcCached(jsxFilename, jsxCode, 'unambiguous');
-        parseFile(undefined, uncachedFilename, uncachedCode);
+        parseOxcProgramFresh(uncachedFilename, uncachedCode, 'module');
       }
     );
     unregister();
@@ -850,7 +849,7 @@ describe('pipeline telemetry boundary', () => {
           parseOxcCached(cachedFilename, cachedCode, 'module')
         ).toThrow();
         expect(() =>
-          parseFile(undefined, directFilename, directCode)
+          parseOxcProgramFresh(directFilename, directCode, 'module')
         ).toThrow();
       }
     );
