@@ -610,6 +610,8 @@ module.exports = {
 
 The preset is a deprecated compatibility wrapper for environments that still invoke WyW through Babel. Bundler plugins use the Oxc-first transform path directly and do not depend on this preset internally.
 
+The preset does not carry the source map of the WyW transform into Babel, so source maps of transformed files describe the transformed code rather than the original file.
+
 Use this preset only when a non-bundler tool already runs Babel and you need WyW to participate in that pipeline, for example a legacy server build or a unit-test transform. Add `@wyw-in-js/babel-preset` at the end of the presets list:
 
 `.babelrc`:
