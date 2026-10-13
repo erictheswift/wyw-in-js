@@ -201,10 +201,7 @@ export class Entrypoint extends BaseEntrypoint {
     if (expectedPublication === undefined) {
       throw new EntrypointEvictedError(this);
     }
-    if (
-      !this.isPublishedAs(expectedPublication) &&
-      expectedPublication !== this.#reusedTransformPublication
-    ) {
+    if (!this.isPublishedAs(expectedPublication)) {
       throw new AbortError('superseded');
     }
     const mutation = this.#transformResultMutation;
@@ -665,12 +662,20 @@ export class Entrypoint extends BaseEntrypoint {
     return evaluated;
   }
 
+  /**
+   * Whether the cached `publication` stands for this entrypoint: itself, an
+   * evaluated copy of it, or the evaluated copy whose transformed state it
+   * reused. An entrypoint created from such a copy is not published itself,
+   * so the copy stays its publication until it gets a transform result.
+   */
   public isPublishedAs(
     publication: Entrypoint | IEvaluatedEntrypoint | undefined
   ): boolean {
     return (
       publication === this ||
-      (publication !== undefined && evaluatedSources.get(publication) === this)
+      (publication !== undefined &&
+        (evaluatedSources.get(publication) === this ||
+          publication === this.#reusedTransformPublication))
     );
   }
 

@@ -602,6 +602,43 @@ describe('createEntrypoint', () => {
     expect(entrypoint2.getPreevalResult()).toBe(preevalResult);
   });
 
+  it('is published as the evaluated copy whose transformed state it reuses', () => {
+    const code = 'export const value = 1;';
+    const entrypoint1 = createEntrypoint(
+      services,
+      '/foo/bar.js',
+      ['value'],
+      code
+    );
+    entrypoint1.setTransformResult({ code, metadata: null });
+    const evaluated = entrypoint1.createEvaluated();
+    services.cache.add('entrypoints', '/foo/bar.js', evaluated);
+
+    const entrypoint2 = createEntrypoint(
+      services,
+      '/foo/bar.js',
+      ['value'],
+      code
+    );
+
+    // The reusing entrypoint is not republished: the copy stays in the cache
+    // and is its publication, as it still is for the copy's own source.
+    expect(entrypoint2).not.toBe(entrypoint1);
+    expect(services.cache.get('entrypoints', '/foo/bar.js')).toBe(evaluated);
+    expect(entrypoint2.isPublishedAs(evaluated)).toBe(true);
+    expect(entrypoint1.isPublishedAs(evaluated)).toBe(true);
+
+    // Another copy of the same source is a different publication.
+    expect(entrypoint2.isPublishedAs(entrypoint1.createEvaluated())).toBe(
+      false
+    );
+    expect(entrypoint2.isPublishedAs(undefined)).toBe(false);
+
+    // A transform result of its own replaces the reused state.
+    entrypoint2.setTransformResult({ code, metadata: null });
+    expect(entrypoint2.isPublishedAs(evaluated)).toBe(false);
+  });
+
   it('reuses evaluated parsed state when only changes', () => {
     const loadAndParseFn = jest.fn((s, name, loadedCode) => ({
       ast: s.babel.parseSync(loadedCode ?? '', {

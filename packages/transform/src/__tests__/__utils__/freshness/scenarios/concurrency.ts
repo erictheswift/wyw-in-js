@@ -27,6 +27,13 @@ const sharedWithAccent = (color: string): Record<string, string> => ({
   'tokens.ts': `export const colors = { red: '${color}' };\n`,
 });
 
+/** A styled module whose value export needs the eval runner. */
+const styledWithRuntimeAccent = (color: string): string =>
+  styled(
+    [`export const accent = (() => '${color}')();`],
+    'background: ${accent};'
+  );
+
 /** Concurrent transforms, supersede, the watch loop and shared caches. */
 export const concurrencyScenarios: FreshnessScenario[] = [
   {
@@ -434,6 +441,113 @@ export const concurrencyScenarios: FreshnessScenario[] = [
           css: { 'entry.ts': ['background:crimson-mixed;'] },
           prepared: ['entry.ts'],
           evaluated: ['entry.ts'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'root-after-importer-evaluated-all',
+    title: 'корень после импортёра, который вычислил все его экспорты',
+    refs: ['#427'],
+    files: {
+      'A.ts': styledWithRuntimeAccent('blue'),
+      'page.ts': styled(
+        ["import { accent, style as a } from './A';"],
+        'color: ${accent}; & .${a} { color: ${accent}; }'
+      ),
+    },
+    steps: [
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        note: 'page.ts публикует вычисленную копию A.ts со всеми экспортами',
+        expect: {
+          css: { 'page.ts': ['color:blue;', 'color:blue;'] },
+          prepared: ['A.ts', 'page.ts'],
+          evaluated: ['A.ts', 'page.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }],
+        note: 'корень A.ts переиспользует эту копию, а не готовится заново',
+        expect: {
+          css: { 'A.ts': ['background:blue;'] },
+          prepared: [],
+          evaluated: [],
+        },
+      },
+      { do: 'write', files: { 'A.ts': styledWithRuntimeAccent('red') } },
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        expect: {
+          css: { 'page.ts': ['color:red;', 'color:red;'] },
+          prepared: ['A.ts', 'page.ts'],
+          evaluated: ['A.ts', 'page.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }],
+        expect: {
+          css: { 'A.ts': ['background:red;'] },
+          prepared: [],
+          evaluated: [],
+        },
+      },
+    ],
+  },
+  {
+    id: 'root-and-importer-together-after-dependency-edit',
+    title: 'модуль и его импортёр в одном раунде после правки зависимости',
+    refs: ['#442'],
+    files: {
+      'A.ts': styled(
+        ["import { theme } from './theme';", '', 'export { theme };'],
+        'background: ${theme};'
+      ),
+      'page.ts': styled(
+        ["import { theme, style as a } from './A';"],
+        'color: ${theme}; & .${a} { margin: 0; }'
+      ),
+      'theme.ts': [
+        "import { base } from './palette';",
+        '',
+        'export const theme = (() => `${base}-theme`)();',
+        '',
+      ].join('\n'),
+      'palette.ts': runtimeValue('base', 'blue'),
+    },
+    steps: [
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        expect: {
+          css: { 'page.ts': ['color:blue-theme;', 'margin:0;'] },
+          prepared: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+          evaluated: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }],
+        expect: { css: { 'A.ts': ['background:blue-theme;'] }, ...fromCache },
+      },
+      { do: 'write', files: { 'palette.ts': runtimeValue('base', 'red') } },
+      {
+        do: 'transform',
+        calls: [{ file: 'A.ts' }, { file: 'page.ts' }],
+        note:
+          'проверка свежести page.ts вытесняет новый корень A.ts и ' +
+          'публикует A.ts заново для своего импорта; корень перезапускается',
+        expect: {
+          css: {
+            'A.ts': ['background:red-theme;'],
+            'page.ts': ['color:red-theme;', 'margin:0;'],
+          },
+          prepared: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+          evaluated: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
         },
       },
     ],

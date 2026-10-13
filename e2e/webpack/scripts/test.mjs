@@ -10,6 +10,7 @@ import colors from 'picocolors';
 import prettier from 'prettier';
 
 import { assertSourceMaps } from './sourcemaps.mjs';
+import { assertWatchImporterFirst } from './watch-importer-first.mjs';
 
 const require = createRequire(import.meta.url);
 const useRspack = process.argv.includes('--rspack');
@@ -443,6 +444,7 @@ const main = async () => {
   await assertRspackParallelLoader();
   await assertWorkerThreads();
   await assertWatchUpdates();
+  await assertWatchImporterFirst(PKG_DIR, bundler, bundlerName);
   await assertSourceMaps(PKG_DIR, useRspack);
 };
 
@@ -452,6 +454,8 @@ const run = process.argv.includes('--sourcemaps-only')
   ? runPersistentCacheChild
   : process.argv.includes('--watch-only')
   ? assertWatchUpdates
+  : process.argv.includes('--watch-importer-first-only')
+  ? () => assertWatchImporterFirst(PKG_DIR, bundler, bundlerName)
   : main;
 
 run().then(
