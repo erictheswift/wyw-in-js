@@ -2,6 +2,7 @@
 import { oxcShaker } from '../shaker';
 import { analyzeOxcBarrelFile } from '../transform/oxcBarrelManifest';
 import type { Services } from '../transform/types';
+import { isRootWithoutProcessors } from '../utils/processorImportPrecheck';
 
 import { isEvalOnlyKey } from './brokerCache';
 import type { PreparedModule } from './prepareModuleOnDemand';
@@ -34,6 +35,24 @@ export const buildDirectBarrelProxy = (
 
   const analyzed = analyzeOxcBarrelFile(loadedAndParsed.code, id);
   if (!('reexports' in analyzed)) {
+    return null;
+  }
+
+  // The proxy runs none of the module's own code. While a styled module is
+  // evaluated, the broker adds `__wywPreval` to the load of every dependency,
+  // and the module that such a load prepares can later serve the evaluation
+  // of the loaded module as a root. A module with styles of its own is then
+  // prepared from its own code. A module without processor usages is never
+  // evaluated as a root, so its proxy can serve such a load.
+  if (
+    !analyzed.complete &&
+    only.includes('__wywPreval') &&
+    !isRootWithoutProcessors(
+      loadedAndParsed.code,
+      id,
+      services.options.pluginOptions
+    )
+  ) {
     return null;
   }
 

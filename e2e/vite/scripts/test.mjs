@@ -256,6 +256,45 @@ async function runStaticPureCallCase() {
   }
 }
 
+// The entry is transformed before button.js, which re-exports a runtime value
+// and uses it in its own style. The entry's evaluation loads button.js only
+// for that value; button.js must still emit its own CSS afterwards.
+async function runReexportedValueCase() {
+  const outDir = path.resolve(PKG_DIR, 'dist-reexported-value');
+
+  try {
+    await fs.rm(outDir, { recursive: true, force: true });
+    await build({
+      build: {
+        cssMinify: false,
+        outDir,
+        rollupOptions: {
+          input: path.resolve(PKG_DIR, 'src/reexported-value/index.js'),
+        },
+      },
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [wyw()],
+      root: PKG_DIR,
+    });
+
+    const cssFile = await findFileMatching(outDir, (filePath) =>
+      filePath.endsWith('.css')
+    );
+    const css = normalizeLineEndings(await fs.readFile(cssFile, 'utf-8'));
+    for (const declaration of [
+      /background:\s*blue-accent/,
+      /color:\s*blue-accent/,
+    ]) {
+      if (!declaration.test(css)) {
+        throw new Error(`Expected ${declaration} in the CSS, got:\n${css}`);
+      }
+    }
+  } finally {
+    await fs.rm(outDir, { recursive: true, force: true });
+  }
+}
+
 async function assertFileMatches(filePath, pattern) {
   const contents = normalizeLineEndings(await fs.readFile(filePath, 'utf-8'));
 
@@ -437,6 +476,9 @@ const main = async () => {
 
   console.log(colors.blue('Running case:'), 'staticPureCall');
   await runStaticPureCallCase();
+
+  console.log(colors.blue('Running case:'), 'reexportedValue');
+  await runReexportedValueCase();
 
   console.log(colors.blue('Running case:'), 'loadedCode');
   await assertLoadedCode(PKG_DIR);
