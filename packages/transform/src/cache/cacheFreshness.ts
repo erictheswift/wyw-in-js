@@ -499,10 +499,14 @@ export abstract class CacheFreshness<
         !this.changedFileVersions.has(stripQueryAndHash(filename)) &&
         !this.invalidations.isExplicit(filename) &&
         hashDiskContent(filename) === otherHash;
-      cacheLogger('content has changed, invalidate all for %s', filename);
       this.setContentHash(filename, source, newHash, false, content);
-      if (isLoaderOutput) this.evictFile(filename);
-      else this.invalidateChangedFile(filename);
+      if (isLoaderOutput) {
+        cacheLogger('loader output of %s, evict its own entries', filename);
+        this.evictFile(filename);
+      } else {
+        cacheLogger('content has changed, invalidate all for %s', filename);
+        this.invalidateChangedFile(filename);
+      }
       if (contentChanged) {
         this.forgetEntrypointDependencySnapshot(filename);
         if (!isLoaderOutput) {
