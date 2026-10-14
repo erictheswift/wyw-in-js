@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { logger } from '@wyw-in-js/shared';
 
 import type { TransformCacheEpoch } from './cacheLifecycle';
+import { hashDiskContent } from './diskContent';
 import { isFileStatUnchanged, readFileStat, type FileStat } from './fileStat';
 import { LoadedSources } from './loadedSource';
 import {
@@ -220,22 +221,14 @@ export abstract class CacheFreshness<
         return;
       }
 
-      try {
-        const fileContent = fs.readFileSync(stripQueryAndHash(key), 'utf8');
-        this.setContentHash(key, source, hashContent(fileContent), true);
-      } catch {
-        this.setContentHash(key, source, hashContent(''), true);
-      }
+      const diskHash = hashDiskContent(key) ?? hashContent('');
+      this.setContentHash(key, source, diskHash, true);
       return;
     }
 
     if (cacheName === 'barrelManifests' || cacheName === 'exports') {
-      try {
-        const fileContent = fs.readFileSync(stripQueryAndHash(key), 'utf8');
-        this.setContentHash(key, 'fs', hashContent(fileContent), true);
-      } catch {
-        this.setContentHash(key, 'fs', hashContent(''), true);
-      }
+      const diskHash = hashDiskContent(key) ?? hashContent('');
+      this.setContentHash(key, 'fs', diskHash, true);
     }
   }
 
@@ -500,17 +493,31 @@ export abstract class CacheFreshness<
         : previousHash !== newHash && !isExpectedSynchronization;
 
     if (contentChanged || anyDepChanged) {
+      // A loader before wyw (Storybook's react-docgen-loader) can make the
+      // first loaded code of a file differ from the bytes consumers read from
+      // disk. While the disk still has those bytes, that is no news for them
+      // (#422): replace only the file's own entries, without a change version
+      // that evicts its importers. Reported changes keep the versioned path.
+      const isLoaderOutput =
+        !anyDepChanged &&
+        source === 'loaded' &&
+        previousHash === undefined &&
+        !this.changedFileVersions.has(stripQueryAndHash(filename)) &&
+        hashDiskContent(filename) === otherHash;
       cacheLogger('content has changed, invalidate all for %s', filename);
       this.setContentHash(filename, source, newHash, false, content);
-      this.invalidateChangedFile(filename);
+      if (isLoaderOutput) this.invalidateForFile(filename);
+      else this.invalidateChangedFile(filename);
       if (contentChanged) {
         this.forgetEntrypointDependencySnapshot(filename);
-        this.expectContentHashSynchronization(
-          filename,
-          otherSource,
-          otherHash,
-          newHash
-        );
+        if (!isLoaderOutput) {
+          this.expectContentHashSynchronization(
+            filename,
+            otherSource,
+            otherHash,
+            newHash
+          );
+        }
       }
       changedFiles.add(filename);
       return true;
@@ -948,17 +955,16 @@ export abstract class CacheFreshness<
     if (current) current[source] = hash;
     else this.contentHashes.set(filename, { [source]: hash });
 
-    if (captureDiskBaseline) {
-      try {
-        const diskCode = fs.readFileSync(stripQueryAndHash(filename), 'utf8');
-        this.contentHashes.get(filename)!.fs = hashContent(diskCode);
-        // This is a baseline, not a freshness probe. The first probe must
-        // still read bytes even if the timestamp did not move.
-        this.fileStats.delete(filename);
-      } catch {
-        // Virtual/missing sources have no raw baseline. A later unmatched fs
-        // revision stays conservative; never infer equivalence from mtime.
-      }
+    // Virtual/missing sources have no raw baseline. A later unmatched fs
+    // revision stays conservative; never infer equivalence from mtime.
+    const diskHash = captureDiskBaseline
+      ? hashDiskContent(filename)
+      : undefined;
+    if (diskHash !== undefined) {
+      this.contentHashes.get(filename)!.fs = diskHash;
+      // This is a baseline, not a freshness probe. The first probe must
+      // still read bytes even if the timestamp did not move.
+      this.fileStats.delete(filename);
     }
 
     if (source === 'loaded' && loadedCode !== undefined) {
