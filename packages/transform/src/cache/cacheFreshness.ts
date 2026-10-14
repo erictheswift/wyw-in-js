@@ -490,11 +490,14 @@ export abstract class CacheFreshness<
       // disk. While the disk still has those bytes, that is no news for them
       // (#422): replace only the file's own entries, without a change version
       // that evicts its importers. Reported changes keep the versioned path.
+      // After invalidateForFile, the recorded disk hash may come from bytes
+      // that only later consumers read, so the loader output stays news.
       const isLoaderOutput =
         !anyDepChanged &&
         source === 'loaded' &&
         previousHash === undefined &&
         !this.changedFileVersions.has(stripQueryAndHash(filename)) &&
+        !this.invalidations.isExplicit(filename) &&
         hashDiskContent(filename) === otherHash;
       cacheLogger('content has changed, invalidate all for %s', filename);
       this.setContentHash(filename, source, newHash, false, content);

@@ -432,6 +432,73 @@ export const sessionScenarios: FreshnessScenario[] = [
     ],
   },
   {
+    id: 'loaded-root-after-edit-and-invalidation',
+    title:
+      'правка и invalidateForFile файла, его новые байты читает другой ' +
+      'импортёр, затем корень с кодом загрузчика',
+    refs: ['#422', '#427'],
+    files: {
+      ...loaderChain('16px'),
+      'card2.ts': styled(
+        ["import { size } from './image';"],
+        'max-height: ${size};'
+      ),
+    },
+    steps: [
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        expect: {
+          css: { 'page.ts': ['min-height:16px-card;'] },
+          ...chainRecompute,
+        },
+      },
+      { do: 'write', files: { 'image.ts': loaderChain('20px')['image.ts'] } },
+      { do: 'invalidate', files: ['image.ts'] },
+      {
+        do: 'transform',
+        calls: [{ file: 'card2.ts' }],
+        note: 'запоминает хеш новых байтов image.ts без версии изменения',
+        expect: {
+          css: { 'card2.ts': ['max-height:20px;'] },
+          prepared: ['card2.ts', 'image.ts'],
+          evaluated: ['card2.ts', 'image.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'image.ts', source: 'loaded' }],
+        expect: {
+          css: { 'image.ts': ['width:20px;outline:none-loaded;'] },
+          prepared: ['image.ts'],
+          evaluated: ['image.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        note:
+          'диск совпадает с последним прочитанным, но page.ts и card.ts ' +
+          'читали прежние байты: после invalidateForFile код загрузчика ' +
+          'по-прежнему сообщается как изменение',
+        expect: {
+          css: { 'page.ts': ['min-height:20px-card;'] },
+          prepared: ['card.ts', 'page.ts'],
+          evaluated: ['card.ts', 'page.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'card.ts' }],
+        expect: {
+          css: { 'card.ts': ['height:20px-card;'] },
+          prepared: ['card.ts'],
+          evaluated: [],
+        },
+      },
+    ],
+  },
+  {
     id: 'query-variants',
     title: 'варианты одного файла с ?query / #hash',
     refs: ['#234', '#278'],

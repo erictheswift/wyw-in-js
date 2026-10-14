@@ -161,7 +161,11 @@ it('keeps a root waiting for eval when its dependency arrives with loader output
   fs.writeFileSync(heroFile, heroCode);
 
   const cache = new TransformCacheCollection();
-  const evictions = jest.spyOn(cache, 'invalidateForFile');
+  // Files whose entries the cache drops, on a freshness check or on request.
+  const evictions = jest.spyOn(
+    cache as unknown as { evictFile(filename: string): void },
+    'evictFile'
+  );
 
   const asyncResolve = async (what: string, importer: string) => {
     if (what === 'test-css-processor') {
