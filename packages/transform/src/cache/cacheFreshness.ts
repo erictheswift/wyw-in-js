@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import { logger } from '@wyw-in-js/shared';
 
 import type { TransformCacheEpoch } from './cacheLifecycle';
+import { hashDiskContent } from './diskContent';
+import { FileInvalidations } from './fileInvalidations';
 import { isFileStatUnchanged, readFileStat, type FileStat } from './fileStat';
 import { LoadedSources } from './loadedSource';
 import {
@@ -58,9 +60,7 @@ export abstract class CacheFreshness<
     number
   >();
 
-  private invalidatedFiles = new Map<string, number>();
-
-  private consumedInvalidationVersions = new Map<string, number>();
+  private readonly invalidations = new FileInvalidations();
 
   /** @internal */
   protected abstract assertEpoch(epoch: TransformCacheEpoch): void;
@@ -220,22 +220,14 @@ export abstract class CacheFreshness<
         return;
       }
 
-      try {
-        const fileContent = fs.readFileSync(stripQueryAndHash(key), 'utf8');
-        this.setContentHash(key, source, hashContent(fileContent), true);
-      } catch {
-        this.setContentHash(key, source, hashContent(''), true);
-      }
+      const diskHash = hashDiskContent(key) ?? hashContent('');
+      this.setContentHash(key, source, diskHash, true);
       return;
     }
 
     if (cacheName === 'barrelManifests' || cacheName === 'exports') {
-      try {
-        const fileContent = fs.readFileSync(stripQueryAndHash(key), 'utf8');
-        this.setContentHash(key, 'fs', hashContent(fileContent), true);
-      } catch {
-        this.setContentHash(key, 'fs', hashContent(''), true);
-      }
+      const diskHash = hashDiskContent(key) ?? hashContent('');
+      this.setContentHash(key, 'fs', diskHash, true);
     }
   }
 
@@ -244,9 +236,8 @@ export abstract class CacheFreshness<
     this.contentHashes.clear();
     this.pendingContentHashSynchronizations.clear();
     this.fileStats.clear();
-    this.invalidatedFiles.clear();
+    this.invalidations.clear();
     this.changedFileVersions.clear();
-    this.consumedInvalidationVersions.clear();
   }
 
   /** @internal Recover preceding loader output after dependency invalidation. */
@@ -290,6 +281,11 @@ export abstract class CacheFreshness<
   }
 
   public invalidateForFile(filename: string): void {
+    this.invalidations.markExplicit(filename);
+    this.evictFile(filename);
+  }
+
+  private evictFile(filename: string): void {
     this.pendingContentHashSynchronizations.delete(filename);
     (['barrelManifests', 'entrypoints', 'exports'] as const).forEach(
       (cacheName) => {
@@ -300,7 +296,7 @@ export abstract class CacheFreshness<
   }
 
   private invalidateChangedFile(filename: string): void {
-    this.invalidateForFile(filename);
+    this.evictFile(filename);
     this.invalidationVersion += 1;
     this.changedFileVersions.set(
       stripQueryAndHash(filename),
@@ -309,22 +305,11 @@ export abstract class CacheFreshness<
   }
 
   protected markInvalidated(filename: string): void {
-    const key = stripQueryAndHash(filename);
-    const version = this.invalidatedFiles.get(key) ?? 0;
-    this.invalidatedFiles.set(key, version + 1);
+    this.invalidations.mark(filename);
   }
 
   public consumeInvalidation(filename: string): boolean {
-    const key = stripQueryAndHash(filename);
-    const invalidationVersion = this.invalidatedFiles.get(key);
-    if (invalidationVersion === undefined) return false;
-
-    const consumedVersion =
-      this.consumedInvalidationVersions.get(filename) ?? 0;
-    if (consumedVersion >= invalidationVersion) return false;
-
-    this.consumedInvalidationVersions.set(filename, invalidationVersion);
-    return true;
+    return this.invalidations.consume(filename);
   }
 
   public invalidateIfChanged(
@@ -500,17 +485,38 @@ export abstract class CacheFreshness<
         : previousHash !== newHash && !isExpectedSynchronization;
 
     if (contentChanged || anyDepChanged) {
-      cacheLogger('content has changed, invalidate all for %s', filename);
+      // A loader before wyw (Storybook's react-docgen-loader) can make the
+      // first loaded code of a file differ from the bytes consumers read from
+      // disk. While the disk still has those bytes, that is no news for them
+      // (#422): replace only the file's own entries, without a change version
+      // that evicts its importers. Reported changes keep the versioned path.
+      // After invalidateForFile, the recorded disk hash may come from bytes
+      // that only later consumers read, so the loader output stays news.
+      const isLoaderOutput =
+        !anyDepChanged &&
+        source === 'loaded' &&
+        previousHash === undefined &&
+        !this.changedFileVersions.has(stripQueryAndHash(filename)) &&
+        !this.invalidations.isExplicit(filename) &&
+        hashDiskContent(filename) === otherHash;
       this.setContentHash(filename, source, newHash, false, content);
-      this.invalidateChangedFile(filename);
+      if (isLoaderOutput) {
+        cacheLogger('loader output of %s, evict its own entries', filename);
+        this.evictFile(filename);
+      } else {
+        cacheLogger('content has changed, invalidate all for %s', filename);
+        this.invalidateChangedFile(filename);
+      }
       if (contentChanged) {
         this.forgetEntrypointDependencySnapshot(filename);
-        this.expectContentHashSynchronization(
-          filename,
-          otherSource,
-          otherHash,
-          newHash
-        );
+        if (!isLoaderOutput) {
+          this.expectContentHashSynchronization(
+            filename,
+            otherSource,
+            otherHash,
+            newHash
+          );
+        }
       }
       changedFiles.add(filename);
       return true;
@@ -948,17 +954,16 @@ export abstract class CacheFreshness<
     if (current) current[source] = hash;
     else this.contentHashes.set(filename, { [source]: hash });
 
-    if (captureDiskBaseline) {
-      try {
-        const diskCode = fs.readFileSync(stripQueryAndHash(filename), 'utf8');
-        this.contentHashes.get(filename)!.fs = hashContent(diskCode);
-        // This is a baseline, not a freshness probe. The first probe must
-        // still read bytes even if the timestamp did not move.
-        this.fileStats.delete(filename);
-      } catch {
-        // Virtual/missing sources have no raw baseline. A later unmatched fs
-        // revision stays conservative; never infer equivalence from mtime.
-      }
+    // Virtual/missing sources have no raw baseline. A later unmatched fs
+    // revision stays conservative; never infer equivalence from mtime.
+    const diskHash = captureDiskBaseline
+      ? hashDiskContent(filename)
+      : undefined;
+    if (diskHash !== undefined) {
+      this.contentHashes.get(filename)!.fs = diskHash;
+      // This is a baseline, not a freshness probe. The first probe must
+      // still read bytes even if the timestamp did not move.
+      this.fileStats.delete(filename);
     }
 
     if (source === 'loaded' && loadedCode !== undefined) {

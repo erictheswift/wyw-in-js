@@ -11,6 +11,7 @@ import prettier from 'prettier';
 
 import { assertSourceMaps } from './sourcemaps.mjs';
 import { assertWatchImporterFirst } from './watch-importer-first.mjs';
+import { assertWatchLoaderOutput } from './watch-loader-output.mjs';
 
 const require = createRequire(import.meta.url);
 const useRspack = process.argv.includes('--rspack');
@@ -445,6 +446,7 @@ const main = async () => {
   await assertWorkerThreads();
   await assertWatchUpdates();
   await assertWatchImporterFirst(PKG_DIR, bundler, bundlerName);
+  await assertWatchLoaderOutput(PKG_DIR, bundler, bundlerName);
   await assertSourceMaps(PKG_DIR, useRspack);
 };
 
@@ -456,6 +458,8 @@ const run = process.argv.includes('--sourcemaps-only')
   ? assertWatchUpdates
   : process.argv.includes('--watch-importer-first-only')
   ? () => assertWatchImporterFirst(PKG_DIR, bundler, bundlerName)
+  : process.argv.includes('--watch-loader-output-only')
+  ? () => assertWatchLoaderOutput(PKG_DIR, bundler, bundlerName)
   : main;
 
 run().then(
