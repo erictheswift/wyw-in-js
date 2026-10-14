@@ -47,6 +47,34 @@ const chainRecompute = {
 };
 
 /**
+ * page.ts and page2.ts read `accent` and the class of A.ts, which re-exports
+ * `accent` from theme.ts and uses it in its own style. palette.ts carries a
+ * `-disk` marker in a comment only: a loader that rewrites it changes the
+ * code, not the value.
+ */
+const reexportOverLoadedPalette = (base: string): Record<string, string> => ({
+  'palette.ts': `${runtimeValue('base', base)}// none-disk\n`,
+  'theme.ts': [
+    "import { base } from './palette';",
+    '',
+    'export const accent = (() => `${base}-accent`)();',
+    '',
+  ].join('\n'),
+  'A.ts': styled(
+    ["import { accent } from './theme';", "export { accent } from './theme';"],
+    'background: ${accent};'
+  ),
+  'page.ts': styled(
+    ["import { accent, style as a } from './A';"],
+    'color: ${accent}; & .${a} { margin: 0; }'
+  ),
+  'page2.ts': styled(
+    ["import { accent, style as a } from './A';"],
+    'border-color: ${accent}; & .${a} { margin: 0; }'
+  ),
+});
+
+/**
  * What a transform runs with: the cache salt (resolver, options), the
  * bundler-provided code of roots and dependencies, request variants and
  * explicit invalidation.
@@ -494,6 +522,91 @@ export const sessionScenarios: FreshnessScenario[] = [
           css: { 'card.ts': ['height:20px-card;'] },
           prepared: ['card.ts'],
           evaluated: [],
+        },
+      },
+    ],
+  },
+  {
+    id: 'loaded-dependency-reexport-second-edit',
+    title:
+      'вторая правка транзитивной зависимости из loadDependencyCode за ' +
+      'реэкспортом стилизованного модуля, между правками собран другой импортёр',
+    refs: ['#263', '#422'],
+    files: reexportOverLoadedPalette('blue'),
+    sessions: {
+      default: { loader: { key: 'loader', files: { 'palette.ts': 'loaded' } } },
+    },
+    steps: [
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        expect: {
+          css: { 'page.ts': ['color:blue-accent;', 'margin:0;'] },
+          prepared: ['page.ts', 'palette.ts', 'theme.ts'],
+          evaluated: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'page2.ts' }],
+        expect: {
+          css: { 'page2.ts': ['border-color:blue-accent;', 'margin:0;'] },
+          prepared: ['page2.ts'],
+          evaluated: ['page2.ts'],
+        },
+      },
+      {
+        do: 'write',
+        files: { 'palette.ts': reexportOverLoadedPalette('red')['palette.ts'] },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'page2.ts' }],
+        expect: {
+          css: { 'page2.ts': ['border-color:red-accent;', 'margin:0;'] },
+          prepared: ['page2.ts', 'palette.ts', 'theme.ts'],
+          evaluated: ['A.ts', 'page2.ts', 'palette.ts', 'theme.ts'],
+          reset: 'recovery',
+        },
+        knownBug: {
+          impact: 'performance',
+          description:
+            'Пересборка page2.ts после правки palette.ts запускает ' +
+            'fail-closed recovery (сброс всего кэша). Так же и без ' +
+            'загрузчика; причину в этой строке не разбирали.',
+          intended: { reset: 'none' },
+        },
+      },
+      {
+        do: 'write',
+        files: {
+          'palette.ts': reexportOverLoadedPalette('green')['palette.ts'],
+        },
+      },
+      {
+        do: 'transform',
+        calls: [{ file: 'page.ts' }],
+        expect: {
+          css: { 'page.ts': ['color:red-accent;', 'margin:0;'] },
+          prepared: ['page.ts'],
+          evaluated: ['page.ts'],
+        },
+        knownBug: {
+          impact: 'correctness',
+          description:
+            'Вторая правка транзитивной зависимости не доходит до page.ts, ' +
+            'если первую видел только page2.ts: page.ts пересобирается, но ' +
+            'palette.ts, theme.ts и A.ts заново в eval-раннер не попадают, ' +
+            'и он берёт их значения после первой правки (red вместо green). ' +
+            'Загрузчик, возвращающий байты с диска, и сборка без загрузчика ' +
+            'устаревают здесь так же, в том числе до исправления #422. С ' +
+            'кодом загрузчика, отличным от диска, до #422 строка была ' +
+            'свежей: этот код сообщался как изменение palette.ts и вытеснял ' +
+            'её импортёров.',
+          intended: {
+            css: { 'page.ts': ['color:green-accent;', 'margin:0;'] },
+            evaluated: ['A.ts', 'page.ts', 'palette.ts', 'theme.ts'],
+          },
         },
       },
     ],
