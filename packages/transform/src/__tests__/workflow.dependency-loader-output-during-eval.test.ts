@@ -7,11 +7,14 @@
  * `bg` is a root that imports `image`. While `bg` waits for evaluation, the
  * `image` root arrives with its loader output and `hero` runs again. Reporting
  * that difference as a change of `image` used to evict every importer
- * walked afterwards: the in-flight `bg` root was evicted and created again
- * as `hero`'s dependency, and its evaluation failed with
- * `AbortError: superseded` (later the root restarted instead). The disk
- * bytes still match what the importers read, so only `image` itself is
- * replaced and `bg` finishes on its first attempt.
+ * walked afterwards: `hero` and the in-flight `bg` root were prepared again,
+ * and the evaluation of `bg` failed with `AbortError: superseded` (later the
+ * root restarted instead). The disk bytes still match what the importers
+ * read, so only `image` itself is replaced, `hero` comes from the cache and
+ * `bg` finishes on its first attempt.
+ *
+ * Recomputation is observed through the public `EventEmitter` hooks, like in
+ * the freshness table.
  */
 import fs from 'fs';
 import os from 'os';
@@ -22,7 +25,11 @@ import dedent from 'dedent';
 import { TransformCacheCollection } from '../cache';
 import { disposeEvalBroker } from '../eval/broker';
 import { transform } from '../transform';
-import { EventEmitter } from '../utils/EventEmitter';
+
+import {
+  RecordingEmitter,
+  type RecordingSink,
+} from './__utils__/freshness/recordingEmitter';
 
 const processorFile = path.resolve(
   __dirname,
@@ -64,31 +71,18 @@ const waitFor = (predicate: () => boolean, attempts = 200): Promise<void> =>
     ? Promise.resolve()
     : tick().then(() => waitFor(predicate, attempts - 1));
 
-type EvalFileGate = <TRes>(fn: () => TRes) => TRes;
-
-class EvalFileGateEmitter extends EventEmitter {
+/** Also counts how many times its transform reaches evaluation. */
+class CountingEmitter extends RecordingEmitter {
   public evaluations = 0;
-
-  constructor(private readonly gate: EvalFileGate) {
-    super(
-      () => {},
-      () => 0,
-      () => {},
-      false
-    );
-  }
 
   public perf<TRes>(method: string, fn: () => TRes): TRes {
     if (method === 'transform:evalFile') {
       this.evaluations += 1;
-      return this.gate(fn);
     }
 
     return super.perf(method, fn);
   }
 }
-
-const passThrough: EvalFileGate = (fn) => fn();
 
 it('keeps a root waiting for eval when its dependency arrives with loader output', async () => {
   const root = fs.mkdtempSync(
@@ -161,11 +155,26 @@ it('keeps a root waiting for eval when its dependency arrives with loader output
   fs.writeFileSync(heroFile, heroCode);
 
   const cache = new TransformCacheCollection();
-  // Files whose entries the cache drops, on a freshness check or on request.
-  const evictions = jest.spyOn(
-    cache as unknown as { evictFile(filename: string): void },
-    'evictFile'
-  );
+  // Modules the transforms below recompute: prepared (a new shaken module
+  // was published) or shipped to the eval runner again.
+  const entrypointFiles = new Map<number, string>();
+  let prepared: string[] = [];
+  let evaluated: string[] = [];
+  const sink: RecordingSink = {
+    created: (seqId, filename) => {
+      entrypointFiles.set(seqId, path.basename(filename));
+    },
+    evaluated: (filename) => {
+      evaluated.push(path.basename(filename));
+    },
+    prepared: (seqId) => {
+      prepared.push(entrypointFiles.get(seqId) ?? String(seqId));
+    },
+  };
+  const resetRecomputation = () => {
+    prepared = [];
+    evaluated = [];
+  };
 
   const asyncResolve = async (what: string, importer: string) => {
     if (what === 'test-css-processor') {
@@ -187,7 +196,7 @@ it('keeps a root waiting for eval when its dependency arrives with loader output
   const run = (
     filename: string,
     code: string,
-    eventEmitter = new EvalFileGateEmitter(passThrough)
+    eventEmitter: RecordingEmitter = new RecordingEmitter(sink)
   ) =>
     transform(
       {
@@ -221,19 +230,19 @@ it('keeps a root waiting for eval when its dependency arrives with loader output
     // Consumers read `bg` and `image` from disk.
     await run(heroFile, heroCode);
     await run(imageUserFile, imageUserCode);
-    evictions.mockClear();
 
-    // The `bg` root is held before evaluation.
+    // The `bg` root is prepared and held before evaluation.
     const bgReachedEval = createDeferred();
     const releaseBg = createDeferred();
-    const bgEmitter = new EvalFileGateEmitter((fn) => {
-      bgReachedEval.resolve();
-      return releaseBg.promise.then(fn) as ReturnType<typeof fn>;
+    const bgEmitter = new CountingEmitter(sink, {
+      reached: bgReachedEval.resolve,
+      released: releaseBg.promise,
     });
     const bgTransform = run(bgFile, bgCode, bgEmitter);
     bgTransform.catch(() => {});
     await bgReachedEval.promise;
     const bgRoot = cache.get('entrypoints', bgFile);
+    resetRecomputation();
 
     // The `image` root is created from its loaded code.
     await run(imageFile, imageLoadedCode);
@@ -263,15 +272,14 @@ it('keeps a root waiting for eval when its dependency arrives with loader output
 
     expect(bgResult.cssText).toContain('background:red-mixed');
     expect(heroResult.cssText).toContain('background:red-mixed');
-    // Only `image` is replaced; its importers keep their cache entries.
-    expect(
-      evictions.mock.calls.map(([filename]) => path.basename(filename))
-    ).toEqual(['image.ts']);
+    // Only the `image` root is prepared; its importers keep their cache
+    // entries, so `hero` comes from the cache and nothing is evaluated again.
+    expect(prepared).toEqual(['image.ts']);
+    expect(evaluated).toEqual([]);
     // The `bg` root reached evaluation once: it was neither evicted nor
     // restarted.
     expect(bgEmitter.evaluations).toBe(1);
   } finally {
-    evictions.mockRestore();
     disposeEvalBroker(cache);
     fs.rmSync(root, { recursive: true, force: true });
   }
