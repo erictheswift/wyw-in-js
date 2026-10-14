@@ -201,29 +201,32 @@ const executeTransformAttempt = async (
 
     return result;
   } catch (error) {
-    // Only eviction of this root can restart the top-level input. The
-    // workflow follows supersede successors, so the evicted entrypoint may be
-    // a later generation of the root. Foreign dependency failures and
-    // publications of another source stay fenced.
+    // An eviction of this root restarts the top-level input on its own
+    // budget. The workflow follows supersede successors, so the evicted
+    // entrypoint may be a later generation of the root.
     if (
       error instanceof EntrypointEvictedError &&
-      !entrypoint.isSelfOrSuccessor(error.entrypoint)
+      entrypoint.isSelfOrSuccessor(error.entrypoint)
     ) {
-      throw new AbortError('superseded');
+      throw error;
     }
     // A concurrent transform can widen the root into a new generation while
     // evaluation runs. The fence of that stage aborts the whole workflow
     // instead of handing it over, so restart the input on the new generation.
     // Another transform can also evict or replace the root's publication and
     // publish the same source again. No successor takes over then, so restart
-    // the input on that publication.
+    // the input on that publication, whichever entrypoint's fence stopped it.
     if (
       isAborted(error) &&
-      !(error instanceof EntrypointEvictedError) &&
       (entrypoint.supersededWith !== null ||
         isRepublished(entrypoint, services.cache))
     ) {
       throw new RootSupersededError();
+    }
+    // Otherwise foreign dependency failures and publications of another
+    // source stay fenced.
+    if (error instanceof EntrypointEvictedError) {
+      throw new AbortError('superseded');
     }
     throw error;
   } finally {

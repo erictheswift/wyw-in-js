@@ -1,11 +1,13 @@
 /**
- * A module imported while its own root is still being prepared cannot widen
- * that root at once: the importer defers the supersede until the root's
- * preparation finishes. If another transform evicts the root in that window
+ * A module imported while its own preparation is still running cannot widen
+ * that entrypoint at once: the importer defers the supersede until the
+ * preparation finishes. If another transform evicts the module in that window
  * (a freshness walk that finds it stale, or an explicit invalidation) and
  * nothing created the module again yet, the deferred supersede finds no
- * publication. That is an eviction of the root, which the transform owning
- * the root restarts, as at the other publication fences.
+ * publication. For the root of a transform, that is an eviction of the root,
+ * which the transform restarts, as at the other publication fences. For a
+ * dependency, the transform still restarts if its own root was published
+ * again meanwhile, as after any other aborted dependency.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,8 +17,9 @@ import { TransformCacheCollection } from '../cache';
 import { disposeEvalBroker } from '../eval/broker';
 import { transform } from '../transform';
 import { Entrypoint } from '../transform/Entrypoint';
+import { isAborted } from '../transform/actions/AbortError';
 import { baseHandlers } from '../transform/generators';
-import type { AllHandlers } from '../transform/types';
+import type { AllHandlers, Services } from '../transform/types';
 import { EventEmitter } from '../utils/EventEmitter';
 
 const processorFile = path.resolve(
@@ -51,6 +54,12 @@ const files: Record<string, string> = {
     css,
     "import { accent } from './A';",
     'export const className = css`background: ${accent};`;',
+    '',
+  ].join('\n'),
+  'page2.ts': [
+    css,
+    "import { accent, style } from './A';",
+    'export const className = css`color: ${accent}; & .${style} { margin: 0; }`;',
     '',
   ].join('\n'),
 };
@@ -173,6 +182,151 @@ it('restarts a root evicted before its deferred supersede is applied', async () 
     expect(ruleBodies(rootResult.cssText)).toEqual(['color:red-accent;']);
     expect(ruleBodies(pageResult.cssText)).toEqual(['background:red-accent;']);
   } finally {
+    waitForProcessing.mockRestore();
+    disposeEvalBroker(cache);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('restarts a republished root when a dependency is evicted before its deferred supersede', async () => {
+  const root = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'wyw-deferred-evicted-dependency-'))
+  );
+  Object.entries(files).forEach(([name, code]) =>
+    fs.writeFileSync(path.join(root, name), code)
+  );
+  const fileA = path.join(root, 'A.ts');
+  const filePage = path.join(root, 'page.ts');
+  const cache = new TransformCacheCollection();
+
+  const asyncResolve = async (what: string, importer: string) =>
+    what === 'test-css-processor'
+      ? processorFile
+      : `${path.resolve(path.dirname(importer), what)}.ts`;
+
+  // A.ts is held at the end of its preparation as a dependency of page.ts.
+  const dependencyPrepared = createDeferred();
+  const releaseDependency = createDeferred();
+  let holdDependency = true;
+  let pageServices: Services | undefined;
+  const pageHandlers = {
+    transform: async function* holdPreparedDependency(
+      this: { entrypoint: Entrypoint; services: Services },
+      ...args: unknown[]
+    ) {
+      const result = yield* (
+        baseHandlers.transform as (...a: unknown[]) => Generator
+      ).apply(this, args);
+      if (holdDependency && this.entrypoint.name === fileA) {
+        holdDependency = false;
+        pageServices = this.services;
+        dependencyPrepared.resolve();
+        await releaseDependency.promise;
+      }
+      return result;
+    },
+  } as unknown as Partial<AllHandlers<'sync'>>;
+
+  // page2.ts needs more of A.ts while it is being prepared: it defers the
+  // supersede and waits for that preparation.
+  const page2Waits = createDeferred();
+  const originalWaitForProcessing = Entrypoint.prototype.waitForProcessing;
+  const waitForProcessing = jest
+    .spyOn(Entrypoint.prototype, 'waitForProcessing')
+    .mockImplementation(function waitForDependency(this: Entrypoint) {
+      if (this.name === fileA) page2Waits.resolve();
+      return originalWaitForProcessing.call(this);
+    });
+
+  const deferredSupersedeFailures: string[] = [];
+  const originalApply = Entrypoint.prototype.applyDeferredSupersede;
+  const applyDeferredSupersede = jest
+    .spyOn(Entrypoint.prototype, 'applyDeferredSupersede')
+    .mockImplementation(function recordFailure(
+      this: Entrypoint,
+      ...args: Parameters<Entrypoint['applyDeferredSupersede']>
+    ) {
+      try {
+        return originalApply.apply(this, args);
+      } catch (error) {
+        if (isAborted(error)) {
+          deferredSupersedeFailures.push(path.basename(this.name));
+        }
+        throw error;
+      }
+    });
+
+  // After the dependency got its transform result, another transform evicts
+  // A.ts and, finding page.ts stale too, publishes page.ts again from the
+  // unchanged file.
+  const dependencyIds = new Set<number>();
+  let republished = 0;
+  const pageEmitter = new EventEmitter(
+    () => {},
+    () => 0,
+    (id, _timestamp, event) => {
+      if (event.type === 'created' && event.filename === fileA) {
+        dependencyIds.add(id);
+      }
+      if (
+        event.type === 'setTransformResult' &&
+        dependencyIds.has(id) &&
+        republished === 0
+      ) {
+        republished += 1;
+        cache.invalidateForFile(fileA);
+        cache.invalidateForFile(filePage);
+        Entrypoint.createRoot(
+          pageServices!,
+          filePage,
+          ['__wywPreval'],
+          undefined
+        );
+      }
+    },
+    false
+  );
+
+  const run = (
+    name: string,
+    eventEmitter?: EventEmitter,
+    handlers: Partial<AllHandlers<'sync'>> = {}
+  ) =>
+    transform(
+      {
+        cache,
+        eventEmitter,
+        options: { filename: path.join(root, name), root, pluginOptions },
+      },
+      files[name],
+      asyncResolve,
+      handlers
+    );
+
+  try {
+    const pageTransform = run('page.ts', pageEmitter, pageHandlers);
+    pageTransform.catch(() => {});
+    await dependencyPrepared.promise;
+
+    const page2Transform = run('page2.ts');
+    page2Transform.catch(() => {});
+    await page2Waits.promise;
+
+    releaseDependency.resolve();
+    const [pageResult, page2Result] = await Promise.all([
+      pageTransform,
+      page2Transform,
+    ]);
+
+    expect(republished).toBe(1);
+    expect(deferredSupersedeFailures).toEqual(['A.ts']);
+    expect(ruleBodies(pageResult.cssText)).toEqual(['background:red-accent;']);
+    expect(ruleBodies(page2Result.cssText)).toEqual([
+      'color:red-accent;',
+      'margin:0;',
+    ]);
+  } finally {
+    applyDeferredSupersede.mockRestore();
     waitForProcessing.mockRestore();
     disposeEvalBroker(cache);
     fs.rmSync(root, { recursive: true, force: true });
