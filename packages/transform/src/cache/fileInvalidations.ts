@@ -7,7 +7,9 @@ export class FileInvalidations {
   /**
    * Files invalidated through `invalidateForFile`, e.g. by a dev server. Kept
    * until the freshness state is reset, like the change versions: no later
-   * read proves that every earlier consumer saw the recorded disk bytes.
+   * read proves that every earlier consumer saw the recorded disk bytes, not
+   * even a read of the bytes the file had when it was invalidated: an edit
+   * read by a new importer in between may have been reverted.
    */
   private readonly explicitFiles = new Set<string>();
 
