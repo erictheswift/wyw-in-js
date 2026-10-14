@@ -1,5 +1,21 @@
 # @wyw-in-js/shared
 
+## 2.6.0
+
+### Minor Changes
+
+- f216037: Deprecate more public API that the transform pipeline ignores or no longer needs. Everything keeps working in 2.x and is removed in 3.0.
+
+  - The `asyncResolve`, `evalBroker` and `evalCacheKey` fields of the first argument of `transform()`. `transform()` ignores them: pass the resolver as its third argument. The `loadAndParseFn` field is deprecated together with the `LoadAndParseFn` type.
+  - The `TransformCacheCollection` methods `beginUnknownGraphRecovery`, `beginSupersedeStormRecovery` and `createGraphTraversalToken`, which the pipeline does not call.
+  - The `useWeakRefInEval` feature flag. It affects only the deprecated `Module` evaluator; in 3.0 the flag will have no effect.
+
+### Patch Changes
+
+- ca0383f: Add file extensions to relative imports in the published type declarations. The packages are ES modules, so with `moduleResolution` set to `node16` or `nodenext` TypeScript could not resolve imports such as `./debug/fileReporter`: types re-exported from those modules were missing, or became `any` when `skipLibCheck` hid the errors. The declarations now import `./debug/fileReporter.js` and `./parallel/index.js`, like the runtime files do.
+- fa857b8: Cache `findPackageJSON` results per package name and requesting directory. Processors such as Linaria's `styled` call it for every component wrapped from another module; lookups of bundler aliases (for example `@/components/Button`) previously repeated a failing `require.resolve` through every `node_modules` level and re-read the nearest `package.json` each time.
+- 55d9925: Move helpers that adapters kept their own copies of into `@wyw-in-js/shared`: `stripQueryAndHash` and `parseRequest`, `isPlainObject`, `canonicalizeForHash`, `normalizeInputSourceMap`, and the CSS constants shared by the Next.js plugin and the Turbopack loader (`WYW_CSS_MODULE_EXTENSION`, `WYW_CSS_OUTPUT_QUERY`). Adapters and transform now import them. The Babel preset option checks and the Next.js config merging now accept plain objects created in another realm (for example by a `vm` context), as transform already did.
+
 ## 2.5.0
 
 ### Minor Changes

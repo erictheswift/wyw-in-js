@@ -1,5 +1,24 @@
 # @wyw-in-js/cli
 
+## 2.6.0
+
+### Minor Changes
+
+- 208752d: Keep vendor prefixes and the `display` normalization in CSS written by the CLI. With `outputFilename` set, the `url()` rewrite stopped the Stylis prefixer, so CLI output had no vendor prefixes and multi-keyword `display` values such as `flex inline` stayed as written. The CLI now writes the same CSS as the bundler plugins with the same options. To keep declarations unprefixed, pass `--no-prefixer`.
+
+  Add `--prefixer` (`--no-prefixer`), `--keep-comments`, `--keep-comments-pattern` and `--preprocessor` to the CLI. They match the `prefixer`, `keepComments` and `preprocessor` options of the bundler plugins. A custom preprocessor function cannot be set from the CLI.
+
+- a8e53b1: Add opt-in worker threads for transforms. The Vite, esbuild and Bun plugins and the webpack loader accept `parallel: true` (up to four workers) or a worker count, and the CLI accepts `--workers <count>`. Each worker keeps its own cache, a file always returns to the worker that transformed it first, and module resolution still goes through the bundler on the main thread. Options are sent to the workers as data, so function options must be defined in a wyw-in-js config file; with function options or debug reporting, transforms stay on the main thread and a warning explains why. Workers split the parsed-AST cache budget of one process between them and start with a 1.5 GB heap limit, which is raised when a worker runs out of memory. `@wyw-in-js/transform` also exports the underlying `TransformWorkerPool` and the `createParallelTransforms` helper for wyw-in-js integrations; they are experimental and may change in a minor release.
+
+### Patch Changes
+
+- 1028608: Skip directories and symbolic links to directories matched by file patterns instead of stopping the run. Previously, a pattern that also matched a directory left every file unprocessed, printed no summary, and skipped the debug report, and a link to a directory stopped the run with `EISDIR`. A broken link still fails the run.
+- b67771d: Write CSS into `--out-dir` when `--source-root` and the file patterns reach the same directory by different paths, for example through a symbolic link (on macOS, `/tmp` is a link to `/private/tmp`). Previously, such files were written outside `--out-dir`, often next to the source files, and `--insert-css-requires` could append the `require` to the source file instead of the compiled one. `--out-dir` and `--insert-css-requires` are still used as given, so the inserted `require` paths do not change.
+- b67771d: Rewrite relative `url()` paths for `preprocessor: 'none'` when `outputFilename` is set, as the default Stylis preprocessor does. With `--preprocessor none`, the CLI now writes CSS whose relative `url()` paths point at the assets from the CSS file in `--out-dir`. Callers of `transform()` that pass `preprocessor: 'none'` together with `outputFilename` get the rewritten paths too. Bundler plugins do not set `outputFilename` and are not affected. A custom preprocessor function still gets the original paths.
+- Updated dependencies
+  - @wyw-in-js/shared@2.6.0
+  - @wyw-in-js/transform@2.6.0
+
 ## 2.5.1
 
 ### Patch Changes

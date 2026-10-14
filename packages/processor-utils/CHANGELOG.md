@@ -1,5 +1,17 @@
 # @wyw-in-js/processor-utils
 
+## 2.6.0
+
+### Minor Changes
+
+- Bump versions
+
+### Patch Changes
+
+- ca0383f: Add file extensions to relative imports in the published type declarations. The packages are ES modules, so with `moduleResolution` set to `node16` or `nodenext` TypeScript could not resolve imports such as `./debug/fileReporter`: types re-exported from those modules were missing, or became `any` when `skipLibCheck` hid the errors. The declarations now import `./debug/fileReporter.js` and `./parallel/index.js`, like the runtime files do.
+- Updated dependencies
+  - @wyw-in-js/shared@2.6.0
+
 ## 2.5.0
 
 ### Minor Changes
