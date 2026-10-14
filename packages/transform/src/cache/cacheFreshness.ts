@@ -3,6 +3,7 @@ import { logger } from '@wyw-in-js/shared';
 
 import type { TransformCacheEpoch } from './cacheLifecycle';
 import { hashDiskContent } from './diskContent';
+import { FileInvalidations } from './fileInvalidations';
 import { isFileStatUnchanged, readFileStat, type FileStat } from './fileStat';
 import { LoadedSources } from './loadedSource';
 import {
@@ -59,9 +60,7 @@ export abstract class CacheFreshness<
     number
   >();
 
-  private invalidatedFiles = new Map<string, number>();
-
-  private consumedInvalidationVersions = new Map<string, number>();
+  private readonly invalidations = new FileInvalidations();
 
   /** @internal */
   protected abstract assertEpoch(epoch: TransformCacheEpoch): void;
@@ -237,9 +236,8 @@ export abstract class CacheFreshness<
     this.contentHashes.clear();
     this.pendingContentHashSynchronizations.clear();
     this.fileStats.clear();
-    this.invalidatedFiles.clear();
+    this.invalidations.clear();
     this.changedFileVersions.clear();
-    this.consumedInvalidationVersions.clear();
   }
 
   /** @internal Recover preceding loader output after dependency invalidation. */
@@ -283,6 +281,11 @@ export abstract class CacheFreshness<
   }
 
   public invalidateForFile(filename: string): void {
+    this.invalidations.markExplicit(filename);
+    this.evictFile(filename);
+  }
+
+  private evictFile(filename: string): void {
     this.pendingContentHashSynchronizations.delete(filename);
     (['barrelManifests', 'entrypoints', 'exports'] as const).forEach(
       (cacheName) => {
@@ -293,7 +296,7 @@ export abstract class CacheFreshness<
   }
 
   private invalidateChangedFile(filename: string): void {
-    this.invalidateForFile(filename);
+    this.evictFile(filename);
     this.invalidationVersion += 1;
     this.changedFileVersions.set(
       stripQueryAndHash(filename),
@@ -302,22 +305,11 @@ export abstract class CacheFreshness<
   }
 
   protected markInvalidated(filename: string): void {
-    const key = stripQueryAndHash(filename);
-    const version = this.invalidatedFiles.get(key) ?? 0;
-    this.invalidatedFiles.set(key, version + 1);
+    this.invalidations.mark(filename);
   }
 
   public consumeInvalidation(filename: string): boolean {
-    const key = stripQueryAndHash(filename);
-    const invalidationVersion = this.invalidatedFiles.get(key);
-    if (invalidationVersion === undefined) return false;
-
-    const consumedVersion =
-      this.consumedInvalidationVersions.get(filename) ?? 0;
-    if (consumedVersion >= invalidationVersion) return false;
-
-    this.consumedInvalidationVersions.set(filename, invalidationVersion);
-    return true;
+    return this.invalidations.consume(filename);
   }
 
   public invalidateIfChanged(
@@ -506,7 +498,7 @@ export abstract class CacheFreshness<
         hashDiskContent(filename) === otherHash;
       cacheLogger('content has changed, invalidate all for %s', filename);
       this.setContentHash(filename, source, newHash, false, content);
-      if (isLoaderOutput) this.invalidateForFile(filename);
+      if (isLoaderOutput) this.evictFile(filename);
       else this.invalidateChangedFile(filename);
       if (contentChanged) {
         this.forgetEntrypointDependencySnapshot(filename);
