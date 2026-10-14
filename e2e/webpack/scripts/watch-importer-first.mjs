@@ -135,8 +135,17 @@ const readRuleBodies = async (outputPath) => {
   );
 };
 
-const runScenario = async (pkgDir, bundler, bundlerName, scenario) => {
-  const tempDir = await fs.mkdtemp(path.join(pkgDir, 'watch-importer-first-'));
+/**
+ * Runs a scenario in watch mode and checks the CSS of the cold build and of
+ * every edit. `scenario.loaders` run before wyw on every module.
+ */
+export const runWatchScenario = async (
+  pkgDir,
+  bundler,
+  bundlerName,
+  scenario
+) => {
+  const tempDir = await fs.mkdtemp(path.join(pkgDir, 'watch-scenario-'));
   const writeFiles = (files) =>
     Promise.all(
       Object.entries(files).map(([file, content]) =>
@@ -154,7 +163,10 @@ const runScenario = async (pkgDir, bundler, bundlerName, scenario) => {
     cache: true,
     module: {
       rules: [
-        { test: /\.js$/, use: ['@wyw-in-js/webpack-loader'] },
+        {
+          test: /\.js$/,
+          use: ['@wyw-in-js/webpack-loader', ...(scenario.loaders ?? [])],
+        },
         {
           test: /\.wyw-in-js\.css$/,
           type: 'asset/resource',
@@ -227,6 +239,6 @@ const runScenario = async (pkgDir, bundler, bundlerName, scenario) => {
 
 export async function assertWatchImporterFirst(pkgDir, bundler, bundlerName) {
   for (const scenario of scenarios) {
-    await runScenario(pkgDir, bundler, bundlerName, scenario);
+    await runWatchScenario(pkgDir, bundler, bundlerName, scenario);
   }
 }
