@@ -483,6 +483,9 @@ export class Entrypoint extends BaseEntrypoint {
     }
 
     if (!this.isPublishedAs(expectedCached)) {
+      // Like the other publication fences: a removed publication is an
+      // eviction, which the transform owning this root may restart.
+      if (expectedCached === undefined) throw new EntrypointEvictedError(this);
       throw new AbortError('superseded');
     }
 
