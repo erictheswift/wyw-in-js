@@ -1,0 +1,7 @@
+---
+'@wyw-in-js/transform': patch
+---
+
+Fix `AbortError: superseded` failures and repeated cache invalidation in builds where a loader changes a module's code before wyw, for example Storybook's `react-docgen-loader`, which appends `Component.__docgenInfo = …` to component modules (#422). When such a module was transformed after other modules had read it from disk, the difference between the loader output and the file was handled like an edit of the file: every module importing it, directly or through other modules, was invalidated, including transforms waiting for evaluation, and a module could fail to build once its retries ran out. With Rspack in watch mode, modules importing such a module could also keep stale CSS after one of its dependencies was edited. While the file on disk still has the bytes its importers read, the loader output now replaces only the module's own cache entries: cold builds with such loaders no longer invalidate unchanged modules again and again and are faster, and that Rspack rebuild gets fresh CSS. The loader output still counts as a change if, before it arrives, the file was edited after its importers read it or was passed to `invalidateForFile`.
+
+Also restart, instead of failing with `AbortError: superseded`, a transform on a shared cache when another transform evicts its module right after the module was prepared while an importing module waits for that preparation.
