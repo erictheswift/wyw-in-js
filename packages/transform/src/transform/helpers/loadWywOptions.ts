@@ -41,11 +41,34 @@ const searchPlaces = [
   `wyw-in-js.config.cjs`,
 ];
 
-const explorerSync = cosmiconfigSync('wyw-in-js', {
-  searchPlaces: searchPlaces.filter(
-    (searchPlace) => !searchPlace.endsWith('.mjs')
-  ),
-});
+// cosmiconfig compiles .ts configs with the TypeScript compiler API, which
+// TypeScript 7 does not ship, and has no loader for .mts or .cts. A runtime
+// that strips types itself (Node.js 22.18+ and 23.6+, Bun) loads those with
+// require(); a .ts config keeps cosmiconfig whenever the API is there.
+const runtimeStripsTypes =
+  Boolean(process.features.typescript) || 'bun' in process.versions;
+
+let typeScriptCompilerApi: boolean | undefined;
+const hasTypeScriptCompilerApi = (): boolean => {
+  if (typeScriptCompilerApi === undefined) {
+    try {
+      const cosmiconfigRequire = createRequire(
+        createRequire(import.meta.url).resolve('cosmiconfig')
+      );
+      typeScriptCompilerApi =
+        typeof cosmiconfigRequire('typescript').transpileModule === 'function';
+    } catch {
+      typeScriptCompilerApi = false;
+    }
+  }
+
+  return typeScriptCompilerApi;
+};
+
+const getErrorCode = (error: unknown): string | undefined =>
+  error && typeof error === 'object' && 'code' in error
+    ? (error as { code?: string }).code
+    : undefined;
 
 export type PartialOptions = Partial<Omit<PluginOptions, 'features'>> & {
   features?: Partial<FeatureFlags>;
@@ -110,10 +133,7 @@ const loadMjsConfig = (configFile: string): Partial<StrictOptions> => {
   try {
     return normalizeLoadedConfig(configRequire(resolvedConfigFile));
   } catch (error) {
-    const code =
-      error && typeof error === 'object' && 'code' in error
-        ? (error as { code?: string }).code
-        : undefined;
+    const code = getErrorCode(error);
     const message = error instanceof Error ? error.message : String(error);
 
     if (
@@ -123,7 +143,9 @@ const loadMjsConfig = (configFile: string): Partial<StrictOptions> => {
     ) {
       throw new Error(
         `[wyw-in-js] Failed to load ${resolvedConfigFile}. ` +
-          'WyW config loading is synchronous, so .mjs config files must not use top-level await ' +
+          `WyW config loading is synchronous, so ${path.extname(
+            resolvedConfigFile
+          )} config files must not use top-level await ` +
           'or depend on async ESM modules. Remove top-level await or switch to a synchronous config.'
       );
     }
@@ -132,9 +154,23 @@ const loadMjsConfig = (configFile: string): Partial<StrictOptions> => {
   }
 };
 
+// .mts and .cts configs go through the explorer for its per-path cache.
+const explorerSync = cosmiconfigSync('wyw-in-js', {
+  loaders: runtimeStripsTypes
+    ? { '.mts': loadMjsConfig, '.cts': loadMjsConfig }
+    : {},
+  searchPlaces: searchPlaces.filter(
+    (searchPlace) => !searchPlace.endsWith('.mjs')
+  ),
+});
+
 const loadConfigFromFile = (configFile: string): Partial<StrictOptions> => {
   const resolvedConfigFile = resolveConfigFilePath(configFile);
-  if (path.extname(resolvedConfigFile) === '.mjs') {
+  const extension = path.extname(resolvedConfigFile);
+  if (
+    extension === '.mjs' ||
+    (extension === '.ts' && runtimeStripsTypes && !hasTypeScriptCompilerApi())
+  ) {
     return loadMjsConfig(resolvedConfigFile);
   }
 
