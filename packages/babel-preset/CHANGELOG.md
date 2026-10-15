@@ -1,5 +1,19 @@
 # @wyw-in-js/babel-preset
 
+## 2.6.0
+
+### Minor Changes
+
+- Bump versions
+
+### Patch Changes
+
+- 0f73f53: Parse the transformed code with the parser options of the file being compiled. The transformed code keeps JSX and TypeScript syntax, but the preset parsed it without any syntax plugins, so a JSX or TypeScript file with a WyW tag failed with errors such as "Support for the experimental syntax 'jsx' isn't currently enabled", even when `@babel/preset-react` or `@babel/preset-typescript` was configured.
+- 55d9925: Move helpers that adapters kept their own copies of into `@wyw-in-js/shared`: `stripQueryAndHash` and `parseRequest`, `isPlainObject`, `canonicalizeForHash`, `normalizeInputSourceMap`, and the CSS constants shared by the Next.js plugin and the Turbopack loader (`WYW_CSS_MODULE_EXTENSION`, `WYW_CSS_OUTPUT_QUERY`). Adapters and transform now import them. The Babel preset option checks and the Next.js config merging now accept plain objects created in another realm (for example by a `vm` context), as transform already did.
+- Updated dependencies
+  - @wyw-in-js/shared@2.6.0
+  - @wyw-in-js/transform@2.6.0
+
 ## 2.5.1
 
 ### Patch Changes
