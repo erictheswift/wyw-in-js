@@ -1,9 +1,12 @@
-import fs, { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import fs, { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { createRequire } from 'module';
 import path from 'path';
 
-import { loadWywOptions } from '../transform/helpers/loadWywOptions';
+import {
+  compileTypeScriptConfig,
+  loadWywOptions,
+} from '../transform/helpers/loadWywOptions';
 
 describe('loadWywOptions', () => {
   const initialCwd = process.cwd();
@@ -213,6 +216,45 @@ describe('loadWywOptions', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // chmod does not stop root from writing.
+  (process.getuid?.() === 0 ? it.skip : it)(
+    'loads a .ts config without writing next to it',
+    () => {
+      const root = mkdtempSync(path.join(tmpdir(), 'wyw-options-'));
+      const configFile = path.join(root, 'wyw-in-js.config.ts');
+
+      writeFileSync(
+        configFile,
+        [
+          "enum Slug { Suffix = '-ts' }",
+          'export default {',
+          '  classNameSlug: (hash: string) => `${hash}${Slug.Suffix}`,',
+          '  root: __dirname,',
+          '};',
+          '',
+        ].join('\n')
+      );
+      chmodSync(root, 0o555);
+
+      try {
+        const compiled = compileTypeScriptConfig(
+          configFile,
+          fs.readFileSync(configFile, 'utf8')
+        ) as { classNameSlug: (hash: string) => string; root: string };
+        const options = loadWywOptions({ configFile });
+
+        expect(compiled.classNameSlug('abc')).toBe('abc-ts');
+        expect(compiled.root).toBe(fs.realpathSync(root));
+        expect((options.classNameSlug as (hash: string) => string)('abc')).toBe(
+          'abc-ts'
+        );
+      } finally {
+        chmodSync(root, 0o755);
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
 
   it('loads explicit CommonJS .cts configFile paths', () => {
     const root = fs.realpathSync(
