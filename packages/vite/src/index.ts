@@ -528,12 +528,13 @@ export default function wywInJS({
         disposeEvalBrokers();
         if (config.build.watch) parallelTransforms?.disposeEvalBrokers();
         else await disposeParallelTransforms();
-        return;
       }
-
-      // The dev server runs buildEnd when it closes. A middleware-mode server
-      // has no httpServer to emit 'close', and Vite does not call closeWatcher
-      // in dev, so this is the only hook that sees it go.
+    },
+    async closeBundle() {
+      // A dev server runs closeBundle when it closes, also in middleware mode,
+      // which has no httpServer to emit 'close'. buildEnd does not do: in the
+      // full-bundle dev mode of Vite 8 it runs after the first bundle.
+      if (config.command !== 'serve') return;
       disposeEvalBrokers();
       await disposeParallelTransforms();
     },
