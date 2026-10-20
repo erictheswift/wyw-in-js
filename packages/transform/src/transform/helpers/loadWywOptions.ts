@@ -87,10 +87,41 @@ const getTypeScriptCompiler = (): TypeScriptCompiler | null => {
   return typeScriptCompiler;
 };
 
+const getErrorCode = (error: unknown): string | undefined =>
+  error && typeof error === 'object' && 'code' in error
+    ? (error as { code?: string }).code
+    : undefined;
+
+const typeScriptErrorPrefix = (filepath: string): string =>
+  `TypeScript Error in ${filepath}:\n`;
+
+// Config loading is synchronous, so a config with top-level await cannot load.
+const synchronousLoadingError = (
+  configFile: string,
+  error: unknown
+): Error | null => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    getErrorCode(error) !== 'ERR_REQUIRE_ASYNC_MODULE' &&
+    !message.includes('require() async module') &&
+    !message.includes('top-level await')
+  ) {
+    return null;
+  }
+
+  return new Error(
+    `[wyw-in-js] Failed to load ${configFile}. ` +
+      `WyW config loading is synchronous, so ${path.extname(
+        configFile
+      )} config files must not use top-level await ` +
+      'or depend on async ESM modules. Remove top-level await or switch to a synchronous config.'
+  );
+};
+
 // Compiles like cosmiconfig's .ts loader but evaluates the output in memory:
 // cosmiconfig writes it to a shared <name>.cjs next to the config, which loads
 // from several worker threads delete under each other.
-export const compileTypeScriptConfig = (
+const compileTypeScriptConfig = (
   filepath: string,
   content: string
 ): unknown => {
@@ -143,8 +174,13 @@ export const compileTypeScriptConfig = (
     compiled._compile(outputText, realFilepath);
     return (compiled.exports as { default?: unknown }).default;
   } catch (error) {
+    const asyncError = synchronousLoadingError(filepath, error);
+    if (asyncError) {
+      throw asyncError;
+    }
+
     // Node can rethrow the same error object for the same source.
-    const prefix = `TypeScript Error in ${filepath}:\n`;
+    const prefix = typeScriptErrorPrefix(filepath);
     if (error instanceof Error && !error.message.startsWith(prefix)) {
       error.message = `${prefix}${error.message}`;
     }
@@ -154,15 +190,10 @@ export const compileTypeScriptConfig = (
 
 const isBun = 'bun' in process.versions;
 
-// Without the compiler API, and always for .mts and .cts (cosmiconfig has no
-// loader for them), a runtime that strips types itself (Node.js 22.18+ and
-// 23.6+, Bun) loads TypeScript configs with require().
+// Node.js 22.18+ and 23.6+ and Bun strip types themselves, so require() loads a
+// TypeScript config; .mts and .cts configs need that (cosmiconfig has no loader
+// for them).
 const runtimeStripsTypes = Boolean(process.features.typescript) || isBun;
-
-const getErrorCode = (error: unknown): string | undefined =>
-  error && typeof error === 'object' && 'code' in error
-    ? (error as { code?: string }).code
-    : undefined;
 
 export type PartialOptions = Partial<Omit<PluginOptions, 'features'>> & {
   features?: Partial<FeatureFlags>;
@@ -227,40 +258,77 @@ const loadMjsConfig = (configFile: string): Partial<StrictOptions> => {
   try {
     return normalizeLoadedConfig(configRequire(resolvedConfigFile));
   } catch (error) {
-    const code = getErrorCode(error);
-    const message = error instanceof Error ? error.message : String(error);
-
-    if (
-      code === 'ERR_REQUIRE_ASYNC_MODULE' ||
-      message.includes('require() async module') ||
-      message.includes('top-level await')
-    ) {
-      throw new Error(
-        `[wyw-in-js] Failed to load ${resolvedConfigFile}. ` +
-          `WyW config loading is synchronous, so ${path.extname(
-            resolvedConfigFile
-          )} config files must not use top-level await ` +
-          'or depend on async ESM modules. Remove top-level await or switch to a synchronous config.'
-      );
-    }
-
-    throw error;
+    throw synchronousLoadingError(resolvedConfigFile, error) ?? error;
   }
 };
 
-// Bun compiles TypeScript itself, import.meta included.
-const loadTypeScriptConfig = (filepath: string, content: string): unknown =>
-  isBun || (runtimeStripsTypes && getTypeScriptCompiler() === null)
-    ? loadMjsConfig(filepath)
-    : compileTypeScriptConfig(filepath, content);
+const usesImportMeta = (content: string): boolean =>
+  /\bimport\.meta\b/.test(content);
+
+// The compiled config behaves as with cosmiconfig's .ts loader, on Node.js and
+// Bun alike. Its CommonJS output cannot hold import.meta, so a runtime that
+// strips types loads such a config with require(), and every .ts config when
+// there is no compiler API.
+const loadTypeScriptConfig = (filepath: string, content: string): unknown => {
+  if (
+    runtimeStripsTypes &&
+    (getTypeScriptCompiler() === null || usesImportMeta(content))
+  ) {
+    return loadMjsConfig(filepath);
+  }
+
+  try {
+    return compileTypeScriptConfig(filepath, content);
+  } catch (error) {
+    // Bun refuses CommonJS output it cannot run, such as one that keeps
+    // top-level await or a syntax error, with an error of its own that names
+    // neither. Loading the config as Bun would names the cause.
+    if (
+      !isBun ||
+      !(error instanceof Error) ||
+      !error.message.includes(
+        'Expected CommonJS module to have a function wrapper'
+      )
+    ) {
+      throw error;
+    }
+
+    try {
+      return loadMjsConfig(filepath);
+    } catch (bunError) {
+      if (
+        bunError instanceof Error &&
+        bunError.message.startsWith('[wyw-in-js]')
+      ) {
+        throw bunError;
+      }
+
+      // Bun throws build messages, which are not Errors.
+      const message =
+        bunError && typeof bunError === 'object' && 'message' in bunError
+          ? String(bunError.message)
+          : String(bunError);
+      throw new Error(`${typeScriptErrorPrefix(filepath)}${message}`);
+    }
+  }
+};
+
+const loadStrippedTypeScriptConfig = (filepath: string): unknown => {
+  if (!runtimeStripsTypes) {
+    throw new Error(
+      `[wyw-in-js] Loading ${filepath} needs a runtime that strips types (Node.js 22.18+ or 23.6+, or Bun).`
+    );
+  }
+
+  return loadMjsConfig(filepath);
+};
 
 // TypeScript configs go through the explorer for its per-path cache.
 const explorerSync = cosmiconfigSync('wyw-in-js', {
   loaders: {
     '.ts': loadTypeScriptConfig,
-    ...(runtimeStripsTypes
-      ? { '.mts': loadMjsConfig, '.cts': loadMjsConfig }
-      : {}),
+    '.mts': loadStrippedTypeScriptConfig,
+    '.cts': loadStrippedTypeScriptConfig,
   },
   searchPlaces: searchPlaces.filter(
     (searchPlace) => !searchPlace.endsWith('.mjs')

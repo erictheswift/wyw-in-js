@@ -3,10 +3,7 @@ import { tmpdir } from 'os';
 import { createRequire } from 'module';
 import path from 'path';
 
-import {
-  compileTypeScriptConfig,
-  loadWywOptions,
-} from '../transform/helpers/loadWywOptions';
+import { loadWywOptions } from '../transform/helpers/loadWywOptions';
 
 describe('loadWywOptions', () => {
   const initialCwd = process.cwd();
@@ -238,23 +235,100 @@ describe('loadWywOptions', () => {
       chmodSync(root, 0o555);
 
       try {
-        const compiled = compileTypeScriptConfig(
-          configFile,
-          fs.readFileSync(configFile, 'utf8')
-        ) as { classNameSlug: (hash: string) => string; root: string };
-        const options = loadWywOptions({ configFile });
+        const options = loadWywOptions({ configFile }) as ReturnType<
+          typeof loadWywOptions
+        > & { root?: string };
 
-        expect(compiled.classNameSlug('abc')).toBe('abc-ts');
-        expect(compiled.root).toBe(fs.realpathSync(root));
         expect((options.classNameSlug as (hash: string) => string)('abc')).toBe(
           'abc-ts'
         );
+        expect(options.root).toBe(fs.realpathSync(root));
+        expect(fs.readdirSync(root)).toEqual(['wyw-in-js.config.ts']);
       } finally {
         chmodSync(root, 0o755);
         rmSync(root, { recursive: true, force: true });
       }
     }
   );
+
+  it('reads __dirname and relative files of a symlinked .ts config next to the link', () => {
+    const root = fs.realpathSync(
+      mkdtempSync(path.join(tmpdir(), 'wyw-options-'))
+    );
+    const real = path.join(root, 'real');
+    const link = path.join(root, 'link');
+    fs.mkdirSync(real);
+    fs.mkdirSync(link);
+    writeFileSync(path.join(real, 'flag.js'), 'module.exports = false;\n');
+    writeFileSync(path.join(link, 'flag.js'), 'module.exports = true;\n');
+    writeFileSync(
+      path.join(real, 'wyw-in-js.config.ts'),
+      [
+        "const flag: boolean = require('./flag.js');",
+        'export default { displayName: flag, root: __dirname };',
+        '',
+      ].join('\n')
+    );
+    const configFile = path.join(link, 'wyw-in-js.config.ts');
+    fs.symlinkSync(path.join(real, 'wyw-in-js.config.ts'), configFile);
+
+    try {
+      const options = loadWywOptions({ configFile }) as ReturnType<
+        typeof loadWywOptions
+      > & { root?: string };
+
+      expect(options.displayName).toBe(true);
+      expect(options.root).toBe(link);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('names the .ts config file in a syntax error', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'wyw-options-'));
+    const configFile = path.join(root, 'wyw-in-js.config.ts');
+    writeFileSync(configFile, 'export default { displayName: ;\n');
+
+    try {
+      expect(() => loadWywOptions({ configFile })).toThrow(
+        `TypeScript Error in ${configFile}`
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('explains that a .ts config with top-level await cannot load', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'wyw-options-'));
+    const configFile = path.join(root, 'wyw-in-js.config.ts');
+    writeFileSync(
+      configFile,
+      'const value = await Promise.resolve(true);\nexport default { displayName: value };\n'
+    );
+
+    try {
+      expect(() => loadWywOptions({ configFile })).toThrow(
+        'WyW config loading is synchronous'
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('loads a .ts config that reads import.meta', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'wyw-options-'));
+    const configFile = path.join(root, 'wyw-in-js.config.ts');
+    writeFileSync(
+      configFile,
+      "export default { displayName: import.meta.url.startsWith('file:') };\n"
+    );
+
+    try {
+      expect(loadWywOptions({ configFile }).displayName).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it('loads explicit CommonJS .cts configFile paths', () => {
     const root = fs.realpathSync(
