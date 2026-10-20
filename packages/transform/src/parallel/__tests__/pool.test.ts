@@ -261,6 +261,22 @@ describe('createParallelTransforms', () => {
     await parallel.dispose();
   });
 
+  it('names the first five options and counts the rest', async () => {
+    const onFallback = jest.fn();
+    const parallel = createParallelTransforms({ onFallback, parallel: 1 })!;
+    const window = Object.fromEntries(
+      Array.from({ length: 30 }, (_, index) => [`method${index}`, () => index])
+    );
+
+    expect(
+      parallel.scope('client', config({ eval: { globals: { window } } }))
+    ).toBeNull();
+    expect(onFallback).toHaveBeenCalledWith(
+      'Transforms run on the main thread because the `eval.globals.window.method0`, `eval.globals.window.method1`, `eval.globals.window.method2`, `eval.globals.window.method3`, `eval.globals.window.method4` and 25 more options cannot be passed to a worker thread; define them in a wyw-in-js config file instead.'
+    );
+    await parallel.dispose();
+  });
+
   it('does not send adapter options to a config file', async () => {
     const onFallback = jest.fn();
     const parallel = createParallelTransforms({ onFallback, parallel: 1 })!;

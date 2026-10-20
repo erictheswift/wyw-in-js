@@ -37,8 +37,20 @@ export interface ParallelTransforms {
 const fallbackMessage = (reason: string) =>
   `Transforms run on the main thread because ${reason}.`;
 
-const describeOptions = (keys: string[]) =>
-  `${formatKeys(keys)} ${keys.length > 1 ? 'options' : 'option'}`;
+// An object of functions, such as a `window` stub in `eval.globals`, has a path
+// per function: name the first few and count the rest.
+const NAMED_OPTIONS = 5;
+
+const describeOptions = (keys: string[]) => {
+  if (keys.length > NAMED_OPTIONS) {
+    const named = keys.slice(0, NAMED_OPTIONS).map((key) => `\`${key}\``);
+    return `${named.join(', ')} and ${
+      keys.length - NAMED_OPTIONS
+    } more options`;
+  }
+
+  return `${formatKeys(keys)} ${keys.length > 1 ? 'options' : 'option'}`;
+};
 
 // Plugin options can move to a config file that every worker loads; the
 // adapter's own options, such as a `preprocessor` function, cannot.
